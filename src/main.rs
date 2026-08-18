@@ -177,6 +177,22 @@ enum Command {
         /// The repo whose policy to read. Defaults to the current repo root.
         #[arg(long, value_name = "PATH")]
         repo: Option<PathBuf>,
+        /// Print the orchestrating skill: creating, watching and settling
+        /// tasks. This is the default.
+        #[arg(long, conflicts_with = "authoring")]
+        orchestrating: bool,
+        /// Print the workflow-authoring skill instead: the config schema, the
+        /// script contract, and the design rules, for an agent writing .shep/.
+        #[arg(long)]
+        authoring: bool,
+    },
+
+    /// Scaffold .shep/ in this repo: a minimal valid config and stub scripts.
+    /// Never overwrites; existing files are kept and the gaps filled.
+    Init {
+        /// The repo to scaffold. Defaults to the current repo root.
+        #[arg(long, value_name = "PATH")]
+        repo: Option<PathBuf>,
     },
 
     /// List the types a task can be created as, with their descriptions.
@@ -250,7 +266,12 @@ fn main() -> Result<()> {
                 Command::Status { json } => cmd::status::run(&db, json),
                 Command::Ps { all, json } => cmd::ps::run(&db, all, json),
                 Command::Types { repo, json } => cmd::types::run(&cmd::repo_root(repo)?, json),
-                Command::Skill { repo } => cmd::skill::run(&cmd::repo_root(repo)?),
+                Command::Skill {
+                    repo,
+                    orchestrating: _, // the default; named only for symmetry with --authoring
+                    authoring,
+                } => cmd::skill::run(&cmd::repo_root(repo)?, authoring),
+                Command::Init { repo } => cmd::init::run(&cmd::repo_root(repo)?),
                 Command::Validate { repo, json } => {
                     cmd::validate::run(&cmd::repo_root(repo)?, json)
                 }

@@ -8,6 +8,7 @@ pub mod context;
 pub mod create;
 pub mod forward;
 pub mod get;
+pub mod init;
 pub mod pause;
 pub mod ps;
 pub mod raw;
