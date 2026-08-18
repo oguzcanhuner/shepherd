@@ -8,6 +8,17 @@
 [pipeline.review]
 steps = ["lint", "test"]
 
+# An agent in a pane, in a worktree of its own. `code` returns `started` and the
+# task waits; what resolves it is that agent stopping, and the verdict is the
+# check it left behind (PLAN §7.2).
+[pipeline.implement]
+steps = ["code"]
+await = "agent_stopped"
+
 [type.check]
 description = "Lint and test this repo. No agent, no worktree, no handoff."
 pipelines = ["review"]
+
+[type.feature]
+description = "Hand it to an agent in its own worktree, then lint and test what it did."
+pipelines = ["implement", "review"]

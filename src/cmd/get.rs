@@ -7,6 +7,12 @@ pub fn run(db_path: &Path, task_id: &str, json: bool) -> Result<()> {
     let conn = db::open_existing(db_path)?;
     let task = task::require(&conn, task_id)?;
     let pane = db::pane::for_task(&conn, &task.id)?;
+    // The last agent status seen there, which is what a deferred step is waiting
+    // on an edge in.
+    let agent = match &pane {
+        Some(pane) => db::pane::last_status(&conn, pane)?,
+        None => None,
+    };
     let checks = check::for_task(&conn, &task.id)?;
 
     if json {
@@ -27,6 +33,7 @@ pub fn run(db_path: &Path, task_id: &str, json: bool) -> Result<()> {
                 "base": task.base,
                 "workspace_id": task.workspace_id,
                 "pane": pane,
+                "agent": agent,
                 "created": task.created,
                 "updated": task.updated,
                 "checks": checks.iter().map(|c| serde_json::json!({
@@ -67,6 +74,7 @@ pub fn run(db_path: &Path, task_id: &str, json: bool) -> Result<()> {
         ("base", &task.base),
         ("workspace", &task.workspace_id),
         ("pane", &pane),
+        ("agent", &agent),
     ] {
         if let Some(value) = value {
             rows.push((label, value.clone()));

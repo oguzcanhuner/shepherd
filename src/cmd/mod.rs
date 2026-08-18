@@ -1,7 +1,10 @@
 //! One module per subcommand. Each is a thin shell over `engine` and `db`: the
 //! CLI holds no logic that the supervisor does not also run.
 
+pub mod bind_pane;
 pub mod cancel;
+pub mod check;
+pub mod context;
 pub mod create;
 pub mod forward;
 pub mod get;
@@ -14,6 +17,39 @@ pub mod supervise;
 pub mod trace;
 pub mod types;
 pub mod validate;
+
+/// The environment a step script is given (PLAN §7.1).
+pub const TASK_ENV: &str = "SHEP_TASK_ID";
+/// What Herdr injects into every managed pane (herdr-findings §2).
+pub const PANE_ENV: &str = "HERDR_PANE_ID";
+
+/// Which task this invocation is about.
+///
+/// `--task` wins, then `$SHEP_TASK_ID`, which every step script has. Last comes
+/// `$HERDR_PANE_ID` through `pane_task`, which is all an agent in a pane has —
+/// and the reason a bare `shep context` works at all (PLAN §6).
+pub fn task_id(conn: &rusqlite::Connection, given: Option<String>) -> anyhow::Result<String> {
+    if let Some(id) = given {
+        return Ok(id);
+    }
+    if let Some(id) = std::env::var(TASK_ENV)
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+    {
+        return Ok(id);
+    }
+    let pane = std::env::var(PANE_ENV)
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no task given: pass --task, or run this where ${TASK_ENV} or ${PANE_ENV} is set"
+            )
+        })?;
+    crate::db::pane::task_for(conn, &pane)?.ok_or_else(|| {
+        anyhow::anyhow!("pane {pane} is not bound to a task — has its step run `shep bind-pane`?")
+    })
+}
 
 /// Which repo's policy governs this invocation.
 ///

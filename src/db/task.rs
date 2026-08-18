@@ -229,6 +229,15 @@ pub fn list_by_status(conn: &Connection, status: Status) -> Result<Vec<Task>> {
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+/// The tasks living in a Herdr workspace. `workspace.closed` carries no pane id,
+/// only a workspace, which is the whole reason `workspace_id` is on the row.
+pub fn by_workspace(conn: &Connection, workspace_id: &str) -> Result<Vec<Task>> {
+    let sql = format!("SELECT {COLUMNS} FROM task WHERE workspace_id = ?1 ORDER BY created ASC");
+    let mut stmt = conn.prepare_cached(&sql)?;
+    let rows = stmt.query_map([workspace_id], from_row)?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 pub fn counts_by_status(conn: &Connection) -> Result<Vec<(Status, i64)>> {
     let mut stmt = conn.prepare("SELECT status, COUNT(*) FROM task GROUP BY status")?;
     let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;

@@ -17,6 +17,10 @@ pub mod names {
     pub const TASK_STEP_AWAITING: &str = "task.step_awaiting";
     pub const TASK_PIPELINE_STARTED: &str = "task.pipeline_started";
     pub const TASK_PIPELINE_FINISHED: &str = "task.pipeline_finished";
+    /// A pane (and the worktree it works in) is now this task's.
+    pub const TASK_PANE_BOUND: &str = "task.pane_bound";
+    /// A verdict about a commit was written to `check_run`.
+    pub const TASK_CHECK_SUBMITTED: &str = "task.check_submitted";
     pub const TASK_PARKED: &str = "task.parked";
     pub const TASK_RESUMED: &str = "task.resumed";
     pub const TASK_CANCELLED: &str = "task.cancelled";

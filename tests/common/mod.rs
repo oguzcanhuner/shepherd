@@ -145,6 +145,82 @@ impl Repo {
     }
 }
 
+impl Repo {
+    /// A git repo with one commit, for anything that stamps a sha.
+    ///
+    /// Committer identity is passed per command rather than written to a config,
+    /// so the test does not care what the machine's global git config says.
+    pub fn git_init(&self) -> &Repo {
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(["-c", "user.email=shep@test", "-c", "user.name=shep"])
+                .args(args)
+                .current_dir(self.root())
+                .output()
+                .expect("run git");
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", "the config this task is governed by"]);
+        self
+    }
+
+    /// `git rev-parse HEAD`, which is what a check's sha has to equal.
+    pub fn head(&self) -> String {
+        let out = std::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(self.root())
+            .output()
+            .expect("run git");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+}
+
+/// A repo whose policy is one deferred pipeline and then a synchronous one.
+///
+/// `launch.sh` stands in for `code.sh`: it binds a pane and returns `started`,
+/// with no Herdr anywhere. That is the point — resolution is driven by rows in
+/// `raw_event`, so testing it needs a store and a script, not a session.
+pub fn deferred_repo(shep: &str) -> Repo {
+    let repo = Repo::new();
+    let launch = format!(
+        r#"pane=${{SHEP_PANE:-wZ:$SHEP_TASK_ID}}
+{shep} bind-pane "$pane" --workspace wZ --worktree "$SHEP_REPO" \
+  --branch "shep/$SHEP_TASK_ID" --base main >/dev/null || exit 1
+printf '{{"outcome":"started","pane":"%s"}}\n' "$pane""#
+    );
+    repo.script_with("launch", &launch);
+    repo.recording_script("verify");
+    repo.write(
+        r#"
+[pipeline.implement]
+steps = ["launch"]
+await = "agent_stopped"
+
+[pipeline.after]
+steps = ["verify"]
+
+[pipeline.handoff]
+steps = ["launch"]
+await = "human"
+
+[type.watched]
+description = "An agent in a pane, then a synchronous step of its own."
+pipelines = ["implement", "after"]
+
+[type.handed]
+description = "Waits for a person, and for nothing else."
+pipelines = ["handoff"]
+"#,
+    );
+    repo
+}
+
 pub fn make_executable(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
     let mut perms = std::fs::metadata(path).expect("meta").permissions();

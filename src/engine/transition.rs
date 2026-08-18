@@ -91,11 +91,25 @@ pub fn transition<F>(conn: &mut Connection, task_id: &str, decide: F) -> Result<
 where
     F: FnOnce(&task::Task) -> Result<Decision>,
 {
+    transition_with(conn, task_id, |_, task| decide(task))
+}
+
+/// [`transition`], for a change that also has a row of its own to write.
+///
+/// Binding a pane is a `pane_task` insert *and* a change to the task, and the two
+/// must not be separable — a task that thinks it has a worktree but has no pane
+/// bound is a state nothing recovers from. So the decision function is handed the
+/// transaction, and anything it writes there commits with the transition or not
+/// at all. Returning `Err` rolls the whole thing back.
+pub fn transition_with<F>(conn: &mut Connection, task_id: &str, decide: F) -> Result<Outcome>
+where
+    F: FnOnce(&rusqlite::Transaction<'_>, &task::Task) -> Result<Decision>,
+{
     let tx = db::write_tx(conn)?;
     let current =
         task::get(&tx, task_id)?.ok_or_else(|| Error::TaskNotFound(task_id.to_string()))?;
 
-    let decision = decide(&current)?;
+    let decision = decide(&tx, &current)?;
     let (patch, events) = match decision {
         Decision::Bail(reason) => {
             // Dropping the transaction rolls it back; there was nothing to write.

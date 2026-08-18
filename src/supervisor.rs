@@ -130,6 +130,10 @@ pub struct Tick {
     pub started: usize,
     /// Steps this supervisor has in flight right now.
     pub inflight: usize,
+    /// Herdr events read this tick.
+    pub events: usize,
+    /// Deferred steps this tick resolved.
+    pub resolved: usize,
 }
 
 /// The steps this supervisor has running, one thread each.
@@ -183,6 +187,10 @@ pub fn tick(conn: &mut Connection, db_path: &Path, inflight: &mut Inflight) -> R
         });
     }
 
+    // What Herdr has said since last time, before looking for work: a deferred
+    // step resolved now leaves its task queued, and the same tick starts it.
+    let drained = engine::drain(conn, engine::resolve::BATCH)?;
+
     let queued = task::list_by_status(conn, task::Status::Queued)?;
     let mut started = 0;
     for candidate in &queued {
@@ -200,6 +208,8 @@ pub fn tick(conn: &mut Connection, db_path: &Path, inflight: &mut Inflight) -> R
         running: task::list_by_status(conn, task::Status::Running)?.len(),
         started,
         inflight: inflight.len(),
+        events: drained.consumed,
+        resolved: drained.resolved,
     })
 }
 
@@ -279,8 +289,9 @@ fn run_and_report(db_path: PathBuf, policy: Policy, spec: Box<engine::StepSpec>,
 
     // A fresh connection: this is another writer, and the store is the only thing
     // these two threads share.
-    let result = db::open(&db_path)
-        .and_then(|mut conn| engine::finish_step(&mut conn, &policy, &task_id, &spec, &report));
+    let result = db::open(&db_path).and_then(|mut conn| {
+        engine::finish_step(&mut conn, &policy, &task_id, &spec.at(), &report)
+    });
     match result {
         Ok(outcome) => {
             if let crate::engine::TransitionOutcome::Bailed(reason) = outcome {
@@ -383,6 +394,8 @@ pub fn run(conn: &mut Connection, poll: Duration, max_ticks: Option<u64>) -> Res
                 queued = observed.queued,
                 running = observed.running,
                 inflight = observed.inflight,
+                events = observed.events,
+                resolved = observed.resolved,
                 "tick"
             );
             last_report = observed;

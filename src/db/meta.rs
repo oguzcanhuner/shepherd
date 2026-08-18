@@ -7,6 +7,9 @@ use rusqlite::Connection;
 
 pub const HEARTBEAT: &str = "supervisor.heartbeat";
 pub const PAUSED: &str = "paused";
+/// How far the supervisor has read into `raw_event`. What Herdr said is a log,
+/// and this is the only reader's place in it (PLAN §7.2).
+pub const RAW_CURSOR: &str = "raw_event.cursor";
 
 pub fn get(conn: &Connection, key: &str) -> Result<Option<String>> {
     let mut stmt = conn.prepare_cached("SELECT value FROM meta WHERE key = ?1")?;
@@ -41,6 +44,16 @@ pub fn get_json<T: serde::de::DeserializeOwned>(conn: &Connection, key: &str) ->
 
 pub fn set_json<T: serde::Serialize>(conn: &Connection, key: &str, value: &T) -> Result<()> {
     set(conn, key, &serde_json::to_string(value)?)
+}
+
+/// Where the supervisor has read up to in `raw_event`. Absent means "nothing
+/// read yet", which is 0.
+pub fn raw_cursor(conn: &Connection) -> Result<i64> {
+    Ok(get_json(conn, RAW_CURSOR)?.unwrap_or(0))
+}
+
+pub fn set_raw_cursor(conn: &Connection, seq: i64) -> Result<()> {
+    set_json(conn, RAW_CURSOR, &seq)
 }
 
 /// Is the supervisor being told to hold off? Read every tick.

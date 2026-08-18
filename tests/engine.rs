@@ -340,29 +340,25 @@ fn a_task_whose_policy_will_not_load_parks_with_the_reason() {
 }
 
 #[test]
-fn an_orphaned_step_is_requeued_but_a_pane_is_left_alone() {
+fn an_orphaned_synchronous_step_is_requeued() {
     let store = Store::new();
     let repo = scripted_repo();
     let root = repo.root().to_string_lossy().to_string();
 
-    // Two tasks stuck in `running`, as a supervisor that died mid-step would
-    // leave them.
+    // A task stuck in `running`, as a supervisor that died mid-step would leave
+    // it. Its pipeline has no `await`, so nothing but the supervisor was ever
+    // going to report on it (PLAN §11).
     let orphan = store.task_in(&root, "simple", "orphaned");
-    let watched = store.task_in(&root, "simple", "an agent is on it");
     let mut conn = store.conn();
-    for id in [&orphan.id, &watched.id] {
-        engine::transition(&mut conn, id, |_| {
-            Ok(shepherd::engine::Decision::apply(
-                shepherd::db::task::TaskPatch::new()
-                    .status(Status::Running)
-                    .pipeline(Some("check"))
-                    .step(Some("outcome")),
-            ))
-        })
-        .expect("claim");
-    }
-    // The difference between the two is a bound pane (PLAN §11).
-    shepherd::db::pane::bind(&conn, "wA:p2", &watched.id).expect("bind");
+    engine::transition(&mut conn, &orphan.id, |_| {
+        Ok(shepherd::engine::Decision::apply(
+            shepherd::db::task::TaskPatch::new()
+                .status(Status::Running)
+                .pipeline(Some("check"))
+                .step(Some("outcome")),
+        ))
+    })
+    .expect("claim");
 
     let recovered = engine::recover_orphans(&mut conn).expect("recover");
     assert_eq!(recovered, vec![orphan.id.clone()]);
@@ -370,11 +366,8 @@ fn an_orphaned_step_is_requeued_but_a_pane_is_left_alone() {
         task::require(&conn, &orphan.id).expect("task").status,
         Status::Queued
     );
-    assert_eq!(
-        task::require(&conn, &watched.id).expect("task").status,
-        Status::Running,
-        "an agent is still working in that pane"
-    );
+
+    // A deferred step, by contrast, is still out there — see tests/deferred.rs.
 }
 
 #[test]
@@ -396,7 +389,7 @@ fn a_stale_step_report_is_discarded() {
     engine::cancel(&mut conn, &task.id, None).expect("cancel");
 
     let report = shepherd::engine::run_step(&spec);
-    match engine::finish_step(&mut conn, &policy, &task.id, &spec, &report).expect("finish") {
+    match engine::finish_step(&mut conn, &policy, &task.id, &spec.at(), &report).expect("finish") {
         shepherd::engine::TransitionOutcome::Bailed(reason) => {
             assert!(reason.contains("moved on"), "got {reason}")
         }

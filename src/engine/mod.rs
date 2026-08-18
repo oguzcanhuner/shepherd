@@ -3,18 +3,23 @@
 //! rather than from a transport (PLAN §7.4).
 
 mod plan;
+pub mod resolve;
 mod step;
 mod transition;
 
 pub use plan::Plan;
-pub use step::{StepReport, StepSpec, environment, run as run_step};
-pub use transition::{Applied, Decision, Outcome as TransitionOutcome, transition};
+pub use resolve::{AgentStatus, Drained, drain};
+pub use step::{StepAt, StepReport, StepSpec, environment, run as run_step};
+pub use transition::{
+    Applied, Decision, Outcome as TransitionOutcome, transition, transition_with,
+};
 
 use crate::Outcome;
 use crate::config::{Await, Policy};
+use crate::db::check::{Check, Conclusion, NewCheck};
 use crate::db::event::{NewEvent, names};
 use crate::db::task::{Status, Task, TaskPatch};
-use crate::db::{self, event, task};
+use crate::db::{self, check, event, pane, task};
 use crate::{Error, Result};
 use rusqlite::Connection;
 use std::path::Path;
@@ -140,34 +145,24 @@ pub fn finish_step(
     conn: &mut Connection,
     policy: &Policy,
     task_id: &str,
-    spec: &StepSpec,
+    at: &StepAt,
     report: &StepReport,
 ) -> Result<TransitionOutcome> {
     transition(conn, task_id, |task| {
         // The guard: this thread is reporting on a specific step of a specific
         // round. If any of that has moved, the report is stale.
-        if task.status != Status::Running
-            || task.step.as_deref() != Some(spec.step.as_str())
-            || task.pipeline.as_deref() != Some(spec.pipeline.as_str())
-            || task.round != spec.round
-        {
+        if task.status != Status::Running || StepAt::of(task).as_ref() != Some(at) {
             return Ok(Decision::bail(format!(
-                "task moved on: it is {} at {:?}/{:?} round {}, not {}/{} round {}",
-                task.status,
-                task.pipeline,
-                task.step,
-                task.round,
-                spec.pipeline,
-                spec.step,
-                spec.round
+                "task moved on: it is {} at {:?}/{:?} round {}, not {at}",
+                task.status, task.pipeline, task.step, task.round,
             )));
         }
 
         let finished =
             NewEvent::for_task(names::TASK_STEP_FINISHED, task_id).payload(serde_json::json!({
-                "pipeline": spec.pipeline,
-                "step": spec.step,
-                "round": spec.round,
+                "pipeline": at.pipeline,
+                "step": at.step,
+                "round": at.round,
                 "outcome": report.outcome.as_str(),
                 "note": report.note,
             }));
@@ -177,7 +172,7 @@ pub fn finish_step(
 
             Outcome::Error => park(format!(
                 "step {} errored: {}",
-                spec.step,
+                at.step,
                 report.note.as_deref().unwrap_or("no reason given")
             )),
 
@@ -187,16 +182,16 @@ pub fn finish_step(
                 let on_fail = policy
                     .config
                     .pipeline
-                    .get(&spec.pipeline)
+                    .get(&at.pipeline)
                     .and_then(|p| p.on_fail.clone());
                 park(match on_fail {
                     Some(target) => format!(
                         "step {} rejected; the on_fail loop to {target:?} lands in M6",
-                        spec.step
+                        at.step
                     ),
                     None => format!(
                         "step {} rejected and pipeline {} has no on_fail",
-                        spec.step, spec.pipeline
+                        at.step, at.pipeline
                     ),
                 })
             }
@@ -206,15 +201,15 @@ pub fn finish_step(
                 let awaits = policy
                     .config
                     .pipeline
-                    .get(&spec.pipeline)
+                    .get(&at.pipeline)
                     .and_then(|p| p.await_on);
                 match awaits {
                     Some(await_on) => Decision::apply(TaskPatch::new()).with_event(
                         NewEvent::for_task(names::TASK_STEP_AWAITING, task_id).payload(
                             serde_json::json!({
-                                "pipeline": spec.pipeline,
-                                "step": spec.step,
-                                "round": spec.round,
+                                "pipeline": at.pipeline,
+                                "step": at.step,
+                                "round": at.round,
                                 "await": await_on.as_str(),
                                 "pane": report.pane,
                             }),
@@ -223,7 +218,7 @@ pub fn finish_step(
                     None => park(format!(
                         "step {} returned \"started\", but pipeline {} has no await, so nothing \
                          would ever resolve it",
-                        spec.step, spec.pipeline
+                        at.step, at.pipeline
                     )),
                 }
             }
@@ -363,15 +358,160 @@ pub fn cancel(
     })
 }
 
+/// Where a task's work is happening. Everything but the pane is optional,
+/// because absent means "leave what is there": re-binding a pane for a second
+/// round must not erase the worktree the first round created.
+#[derive(Debug, Clone)]
+pub struct Binding {
+    pub pane: String,
+    pub workspace: Option<String>,
+    pub worktree: Option<String>,
+    pub branch: Option<String>,
+    pub base: Option<String>,
+}
+
+impl Binding {
+    pub fn to(pane: impl Into<String>) -> Binding {
+        Binding {
+            pane: pane.into(),
+            workspace: None,
+            worktree: None,
+            branch: None,
+            base: None,
+        }
+    }
+}
+
+/// `shep bind-pane` — bind a pane to a task, with the worktree it works in.
+///
+/// One transaction for the `pane_task` row, the task's placement and the event.
+/// A task that thinks it has a worktree but has no pane bound is a state nothing
+/// recovers from, and the pane binding is what makes a Herdr event attributable
+/// at all (PLAN §6), so the two must not be separable.
+pub fn bind_pane(
+    conn: &mut Connection,
+    task_id: &str,
+    binding: &Binding,
+) -> Result<TransitionOutcome> {
+    transition_with(conn, task_id, |tx, task| {
+        if task.status.is_terminal() {
+            return Ok(Decision::bail(format!(
+                "task is {} — nothing should be starting work for it",
+                task.status
+            )));
+        }
+        pane::bind(tx, &binding.pane, task_id)?;
+
+        let mut patch = TaskPatch::new();
+        if binding.workspace.is_some() {
+            patch = patch.workspace_id(binding.workspace.clone());
+        }
+        if binding.worktree.is_some() {
+            patch = patch.worktree(binding.worktree.clone());
+        }
+        if binding.branch.is_some() {
+            patch = patch.branch(binding.branch.clone());
+        }
+        if binding.base.is_some() {
+            patch = patch.base(binding.base.clone());
+        }
+
+        Ok(Decision::apply(patch).with_event(
+            NewEvent::for_task(names::TASK_PANE_BOUND, task_id).payload(serde_json::json!({
+                "pane": binding.pane,
+                "workspace": binding.workspace,
+                "worktree": binding.worktree,
+                "branch": binding.branch,
+                "base": binding.base,
+            })),
+        ))
+    })
+}
+
+/// What a check submitter supplies (PLAN §7.3). Notably not the sha.
+#[derive(Debug, Clone)]
+pub struct Submission {
+    pub conclusion: Conclusion,
+    /// Who is judging: a step name, a tool, or a person.
+    pub author: Option<String>,
+    pub body: Option<String>,
+    /// The position being judged, when the caller's environment says. Absent
+    /// means "wherever the task is now", which is what an agent in a pane gets:
+    /// its shell's environment was fixed when the pane was split and would go
+    /// stale the moment the round changed.
+    pub at: Option<StepAt>,
+}
+
+/// `shep check submit` — a verdict plus evidence about a specific commit.
+///
+/// `shep` stamps the sha itself, from `git rev-parse HEAD` in the worktree. The
+/// submitter never supplies it, or a stale check becomes an agent-behaviour bug
+/// instead of an impossible state (PLAN §7.3).
+pub fn submit_check(conn: &mut Connection, task_id: &str, sub: &Submission) -> Result<Check> {
+    let task = task::require(conn, task_id)?;
+    let at = sub.at.clone().or_else(|| StepAt::of(&task));
+    let author = sub
+        .author
+        .clone()
+        .or_else(|| at.as_ref().map(|a| a.step.clone()))
+        .unwrap_or_else(|| "anonymous".to_string());
+
+    // The worktree if there is one, else the repo: a check about a task that
+    // never got a worktree of its own is still a check about a commit.
+    let dir = task.worktree.clone().unwrap_or_else(|| task.repo.clone());
+    // Outside the transaction, on purpose: never hold one open across a
+    // subprocess (PLAN §7.4).
+    let sha = crate::git::head_sha(Path::new(&dir))?;
+
+    let new = NewCheck {
+        task_id: task_id.to_string(),
+        pipeline: at.as_ref().map(|a| a.pipeline.clone()),
+        step: at.as_ref().map(|a| a.step.clone()),
+        round: at.as_ref().map(|a| a.round),
+        author,
+        sha,
+        conclusion: sub.conclusion,
+        body: sub.body.clone(),
+    };
+
+    let tx = db::write_tx(conn)?;
+    let written = check::insert(&tx, &new)?;
+    event::append(
+        &tx,
+        &NewEvent::for_task(names::TASK_CHECK_SUBMITTED, task_id).payload(serde_json::json!({
+            "check": written.id,
+            "author": written.author,
+            "conclusion": written.conclusion.as_str(),
+            "sha": written.sha,
+            "pipeline": written.pipeline,
+            "step": written.step,
+            "round": written.round,
+        })),
+    )?;
+    tx.commit()?;
+    tracing::info!(
+        task = %task_id, check = %written.id, author = %written.author,
+        conclusion = written.conclusion.as_str(), "check submitted"
+    );
+    Ok(written)
+}
+
 /// Requeue steps that were in flight when the supervisor died.
 ///
-/// A task in `running` with no bound pane was synchronous and got orphaned; with
-/// a bound pane, an agent is still working and it must be left alone (PLAN §11).
+/// A synchronous step died with the supervisor and has to be run again; a
+/// deferred one is still out there and must be left alone (PLAN §11). PLAN reads
+/// that difference off the pane binding, but a task keeps its agent pane after
+/// `implement` resolves — `shep context` has to keep working in it, and `handoff`
+/// wants to talk to the same agent — so the config is the better witness: what a
+/// step is waiting for is exactly what its pipeline's `await` says.
+///
+/// The pane binding is still the fallback for a task whose policy will not load,
+/// since then nothing else can say.
 pub fn recover_orphans(conn: &mut Connection) -> Result<Vec<String>> {
     let candidates = task::list_by_status(conn, Status::Running)?;
     let mut recovered = Vec::new();
     for candidate in candidates {
-        if db::pane::for_task(conn, &candidate.id)?.is_some() {
+        if is_deferred(conn, &candidate)? {
             continue;
         }
         let outcome = transition(conn, &candidate.id, |task| {
@@ -395,6 +535,26 @@ pub fn recover_orphans(conn: &mut Connection) -> Result<Vec<String>> {
         }
     }
     Ok(recovered)
+}
+
+/// Is this running task waiting on something outside the supervisor — an agent,
+/// or a human — rather than on a step script that died with it?
+fn is_deferred(conn: &Connection, task: &Task) -> Result<bool> {
+    let Some(at) = StepAt::of(task) else {
+        return Ok(false);
+    };
+    match policy_for(task) {
+        Ok(policy) => Ok(policy
+            .config
+            .pipeline
+            .get(&at.pipeline)
+            .and_then(|p| p.await_on)
+            .is_some()),
+        Err(e) => {
+            tracing::warn!(task = %task.id, "cannot tell what {at} is waiting for: {e}");
+            Ok(pane::for_task(conn, &task.id)?.is_some())
+        }
+    }
 }
 
 /// Await values are config's business, but the engine needs to name them.

@@ -82,6 +82,48 @@ enum Command {
         json: bool,
     },
 
+    /// Bind a Herdr pane to a task, with the worktree its work happens in.
+    /// Run by a step script once it has a pane, before it starts an agent there.
+    #[command(name = "bind-pane")]
+    BindPane {
+        #[arg(value_name = "PANE")]
+        pane: String,
+        /// Defaults to $SHEP_TASK_ID, else the task bound to $HERDR_PANE_ID.
+        #[arg(long, value_name = "TASK")]
+        task: Option<String>,
+        /// The Herdr workspace the pane lives in. Recorded because
+        /// `workspace.closed` carries no pane id.
+        #[arg(long, value_name = "ID")]
+        workspace: Option<String>,
+        #[arg(long, value_name = "PATH")]
+        worktree: Option<String>,
+        #[arg(long, value_name = "NAME")]
+        branch: Option<String>,
+        #[arg(long, value_name = "REF")]
+        base: Option<String>,
+    },
+
+    /// Print the brief. What an agent in a pane runs to find out what it is for.
+    Context {
+        /// Defaults to $SHEP_TASK_ID, else the task bound to $HERDR_PANE_ID.
+        #[arg(long, value_name = "TASK")]
+        task: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Verdicts about a commit.
+    Check {
+        #[command(subcommand)]
+        action: CheckCommand,
+    },
+
+    /// Print one addressed artefact, such as a check.
+    Read {
+        #[arg(value_name = "ID")]
+        id: String,
+    },
+
     /// Re-queue a parked task, retrying the step it stopped on.
     Retry {
         #[arg(value_name = "TASK")]
@@ -133,6 +175,26 @@ enum Command {
     Resume,
 }
 
+#[derive(Subcommand)]
+enum CheckCommand {
+    /// Record a verdict about the worktree as it stands. Body on stdin.
+    ///
+    /// `shep` stamps the sha itself, so a check always says which commit it
+    /// judged.
+    Submit {
+        #[arg(long, conflicts_with = "fail")]
+        pass: bool,
+        #[arg(long)]
+        fail: bool,
+        /// Who is judging. Defaults to the step name.
+        #[arg(long, value_name = "NAME")]
+        author: Option<String>,
+        /// Defaults to $SHEP_TASK_ID, else the task bound to $HERDR_PANE_ID.
+        #[arg(long, value_name = "TASK")]
+        task: Option<String>,
+    },
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let db = cli.db.clone().unwrap_or_else(paths::db_path);
@@ -153,6 +215,24 @@ fn main() -> Result<()> {
                 }
                 Command::Get { task, json } => cmd::get::run(&db, &task, json),
                 Command::Trace { task, json } => cmd::trace::run(&db, &task, json),
+                Command::BindPane {
+                    pane,
+                    task,
+                    workspace,
+                    worktree,
+                    branch,
+                    base,
+                } => cmd::bind_pane::run(&db, &pane, task, workspace, worktree, branch, base),
+                Command::Context { task, json } => cmd::context::run(&db, task, json),
+                Command::Check { action } => match action {
+                    CheckCommand::Submit {
+                        pass,
+                        fail,
+                        author,
+                        task,
+                    } => cmd::check::submit(&db, pass, fail, author, task),
+                },
+                Command::Read { id } => cmd::check::read(&db, &id),
                 Command::Retry { task } => cmd::retry::run(&db, &task),
                 Command::Cancel { task, reason } => cmd::cancel::run(&db, &task, reason),
                 Command::Forward => cmd::forward::run(&db),

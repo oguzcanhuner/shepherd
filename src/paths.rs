@@ -6,6 +6,7 @@
 use std::path::PathBuf;
 
 pub const DB_ENV: &str = "SHEP_DB";
+pub const BIN_ENV: &str = "SHEP_BIN";
 
 /// `$XDG_STATE_HOME/shep`, else `~/.local/state/shep`, else `./.shep-state`.
 pub fn state_dir() -> PathBuf {
@@ -24,6 +25,17 @@ pub fn state_dir() -> PathBuf {
 /// subcommands a script invokes hit the same store the supervisor is driving.
 pub fn db_path() -> PathBuf {
     env_path(DB_ENV).unwrap_or_else(|| state_dir().join("shep.db"))
+}
+
+/// The `shep` a step script should call.
+///
+/// A step script has to be able to reach back — `shep bind-pane`, `shep check
+/// submit` — and it cannot assume the binary is on `$PATH`: in a Herdr plugin it
+/// lives at `<plugin root>/target/release/shep`. So the running process names
+/// itself, which is right whether that is an installed binary or one built in a
+/// checkout. `$SHEP_BIN` overrides, for the same reason `hooks/lib.sh` honours it.
+pub fn shep_bin() -> Option<PathBuf> {
+    env_path(BIN_ENV).or_else(|| std::env::current_exe().ok())
 }
 
 /// Supervisor log file, kept beside the store so an alternate `$SHEP_DB` gets

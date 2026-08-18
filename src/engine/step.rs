@@ -19,6 +19,47 @@ use std::process::Command;
 /// enormous and the verdict is what matters; the tail is what says why.
 const LOG_TAIL: usize = 4_000;
 
+/// Where a task is: the position a report is about.
+///
+/// A synchronous step reports on the position it was spawned at; a deferred one
+/// is resolved by an event that arrives long afterwards. Both have to name the
+/// same three things, because that triple is what the guard in
+/// [`finish_step`](super::finish_step) compares against the row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StepAt {
+    pub pipeline: String,
+    pub step: String,
+    pub round: i64,
+}
+
+impl StepAt {
+    pub fn new(pipeline: impl Into<String>, step: impl Into<String>, round: i64) -> StepAt {
+        StepAt {
+            pipeline: pipeline.into(),
+            step: step.into(),
+            round,
+        }
+    }
+
+    /// Where a task row says it is, if it says anything.
+    pub fn of(task: &Task) -> Option<StepAt> {
+        match (task.pipeline.clone(), task.step.clone()) {
+            (Some(pipeline), Some(step)) => Some(StepAt {
+                pipeline,
+                step,
+                round: task.round,
+            }),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for StepAt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{} round {}", self.pipeline, self.step, self.round)
+    }
+}
+
 /// One step invocation, resolved.
 #[derive(Debug, Clone)]
 pub struct StepSpec {
@@ -83,6 +124,11 @@ impl StepSpec {
             db: db.to_path_buf(),
         })
     }
+
+    /// The position this step is running at.
+    pub fn at(&self) -> StepAt {
+        StepAt::new(&self.pipeline, &self.step, self.round)
+    }
 }
 
 /// What a step said.
@@ -98,6 +144,19 @@ pub struct StepReport {
 }
 
 impl StepReport {
+    /// A verdict reached without running anything: what resolving a deferred step
+    /// produces (PLAN §7.2). There is no exit code and no output, because no
+    /// process was involved — the answer came from a `check_run` row.
+    pub fn verdict(outcome: Outcome, note: impl Into<String>) -> StepReport {
+        StepReport {
+            outcome,
+            note: Some(note.into()),
+            pane: None,
+            exit_code: None,
+            logs: String::new(),
+        }
+    }
+
     fn error(note: impl Into<String>, exit_code: Option<i32>, logs: String) -> StepReport {
         StepReport {
             outcome: Outcome::Error,
@@ -195,6 +254,13 @@ pub fn environment(spec: &StepSpec) -> Vec<(String, String)> {
         ("SHEP_REPO".to_string(), spec.repo.clone()),
         ("SHEP_DB".to_string(), spec.db.display().to_string()),
     ];
+    // An addition to §7.1: a step script has to be able to call back in, and
+    // `shep` is not necessarily on $PATH — inside a Herdr plugin it is
+    // `<plugin root>/target/release/shep`. Naming it beats every script
+    // re-deriving it.
+    if let Some(bin) = crate::paths::shep_bin() {
+        env.push(("SHEP_BIN".to_string(), bin.display().to_string()));
+    }
     // Absent rather than empty: a script testing `-n "$SHEP_WORKTREE"` should get
     // the truth.
     for (key, value) in [

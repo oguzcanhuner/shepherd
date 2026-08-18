@@ -47,6 +47,50 @@ makes the deferred-step path (PLAN §M5) testable in about a second. Reporting
 `idle` on an unfocused pane surfaced as `done`, exactly as
 herdr-findings §5.1 describes.
 
+## A freshly split pane is not an available shell (2026-08-18)
+
+`herdr agent start` on a pane split a moment earlier fails:
+
+```json
+{"error":{"code":"agent_pane_busy",
+          "message":"agent target pane wW:p2 is not an available shell"}}
+```
+
+herdr-findings §5.3 says an available pane must be "at its interactive prompt with
+no foreground command"; what it does not say is that a new pane takes a second or
+two to get there, and there is no readiness field on `pane get` — `agent_status`
+is `unknown` either way.
+
+`herdr pane process-info --pane <id>` is the test that works: it reports
+`shell_pid` and `foreground_process_group_id`, and they are equal exactly when
+nothing is running in front of the prompt. `code.sh` polls that before starting an
+agent. (Note the flag: `herdr pane process-info <pane_id>` positionally is
+"unknown option".)
+
+## `agent start` produces a status event of its own (2026-08-18)
+
+`agent start` returns once Herdr considers the agent ready for input, and that
+readiness is itself a `pane.agent_status_changed` — observed as `idle` for a pane
+split with `--no-focus`, arriving before the prompt was sent.
+
+So "the agent finished" cannot be read off `done`/`idle` alone: the first thing
+every deferred step would see is its own agent starting up. Resolution needs a
+remembered `working` first, which is what `pane_agent` is for.
+
+## Getting environment into an agent's pane (2026-08-18)
+
+`herdr worktree create` takes no `--env` (only `workspace create` does), and its
+response is a `WorkspaceInfo` — no worktree path, no root pane id. So `code.sh`:
+
+- passes `--path` itself, since that is the only way to know where the worktree is;
+- reads the root pane from `herdr pane list --workspace <id>`
+  (`.result.panes[0].pane_id`);
+- and splits *that* with `--env SHEP_DB=... --env SHEP_TASK_ID=...`, which is what
+  makes a bare `shep context` work in the agent's pane.
+
+The split is not just for the environment: it leaves the worktree's own shell pane
+next to the agent, which is where you end up standing when you go and look.
+
 ## Hook stdout is visible and worth using
 
 `herdr plugin log list --plugin shepherd` shows each hook run with its exit code,

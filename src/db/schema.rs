@@ -77,7 +77,21 @@ CREATE TABLE meta (
 ) STRICT;
 "#;
 
-const MIGRATIONS: &[&str] = &[M001_INITIAL];
+/// Migration 2 — the last agent status seen in a pane.
+///
+/// `pane_agent_status_changed` carries no previous status (herdr-findings §5.2),
+/// so the `working` → `done` edge can only be worked out against something we
+/// kept ourselves. This is that: a projection of the status events in
+/// `raw_event`, one row per pane a task is bound to.
+const M002_PANE_AGENT: &str = r#"
+CREATE TABLE pane_agent (
+  pane_id TEXT PRIMARY KEY,
+  status  TEXT NOT NULL,
+  updated INTEGER NOT NULL
+) STRICT;
+"#;
+
+const MIGRATIONS: &[&str] = &[M001_INITIAL, M002_PANE_AGENT];
 
 /// The schema version this build writes.
 pub fn latest_version() -> i64 {
