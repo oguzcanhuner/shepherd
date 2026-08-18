@@ -1,10 +1,10 @@
-//! Resolving a deferred step (PLAN §7.2).
+//! Resolving a deferred step.
 //!
 //! A step that returned `started` made a promise, not an answer. What redeems it
 //! is a Herdr event: the pane's agent stopping, the pane going away, or the
 //! workspace being closed. The hook only appends to `raw_event` — deciding
 //! happens here, because the payload carries no previous status and a hook that
-//! kept state of its own would be a second source of truth (PLAN §M2).
+//! kept state of its own would be a second source of truth.
 //!
 //! Two things make this safe to run every tick:
 //!
@@ -87,7 +87,7 @@ enum Signal {
     /// A pane went away, which ends whatever was running in it.
     PaneGone { pane: String, how: String },
     /// A workspace closed, taking its panes with it and firing no pane events at
-    /// all (NOTES.md). The payload has no pane id, which is why tasks record
+    /// all. The payload has no pane id, which is why tasks record
     /// their `workspace_id`.
     WorkspaceGone { workspace: String },
     /// Everything else. Herdr sends plenty we hooked for other milestones.
@@ -111,7 +111,7 @@ fn read(raw: &RawEvent) -> Signal {
             _ => Signal::Ignored,
         },
         // `pane.exited` lags by 20-25 seconds and sometimes never arrives at all
-        // (NOTES.md), so it is a backstop rather than the trigger. It still has to
+        //, so it is a backstop rather than the trigger. It still has to
         // be honoured: an agent that quit outright never reports `done`.
         Some(kind @ ("pane.exited" | "pane.closed")) => match field("pane_id") {
             Some(pane) => Signal::PaneGone {
@@ -257,7 +257,7 @@ pub fn resolve_awaiting(conn: &mut Connection, task_id: &str, cause: &str) -> Re
         Some(Await::AgentStopped) => {}
         // Nothing resolves a handoff but `shep approve` / `shep reject`. Status
         // events for its pane are kept in `raw_event` and advance nothing
-        // (PLAN §7.2) — the whole point is that you can talk to the agent
+        // — the whole point is that you can talk to the agent
         // without the state machine moving under you.
         Some(Await::Human) => return Ok(false),
         None => return Ok(false),
@@ -270,7 +270,7 @@ pub fn resolve_awaiting(conn: &mut Connection, task_id: &str, cause: &str) -> Re
     // The verdict is a `check_run` row, not anything the agent told us directly.
     // No check means the step errored: an agent that stopped without leaving one
     // may have run out of turns, crashed, or been interrupted, and none of those
-    // are a pass (PLAN §7.2).
+    // are a pass.
     let check = check::latest_for_step(conn, task_id, &at.pipeline, &at.step, at.round)?;
     let report = match &check {
         Some(c) => StepReport::verdict(

@@ -6,7 +6,7 @@ use std::io::Read;
 use std::path::Path;
 
 /// `shep check submit --pass|--fail` — a verdict plus evidence about a commit,
-/// with the body on stdin (PLAN §7.3).
+/// with the body on stdin.
 ///
 /// The submitter never supplies the sha: `shep` stamps it from `git rev-parse
 /// HEAD` in the worktree, so a stale check is an impossible state rather than an
@@ -80,7 +80,7 @@ fn read_body() -> Result<Option<String>> {
     })
 }
 
-/// Where the caller says it is (PLAN §7.3). A step script has all three; an
+/// Where the caller says it is. A step script has all three; an
 /// agent's pane has none of them, and then the task's own position is used —
 /// which is the position being awaited, and the only one that could be right.
 fn position_from_env() -> Option<StepAt> {

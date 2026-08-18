@@ -1,5 +1,5 @@
 //! Logging. Hook and step stdout is not a terminal, so the supervisor logs to a
-//! file beside the store (PLAN §3) and mirrors to stderr only when someone is
+//! file beside the store and mirrors to stderr only when someone is
 //! watching.
 
 use crate::Result;

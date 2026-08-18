@@ -12,7 +12,7 @@ shep=${SHEP_BIN:-shep}
 jsonstr() { printf '%s' "$1" | jq -Rs .; }
 say() { printf '{"outcome":"%s","note":%s}\n' "$1" "$(jsonstr "$2")"; }
 # A step reports a verdict; it does not fail. Exit 0 with `error` and let the
-# engine park the task with the reason (PLAN §7.1).
+# engine park the task with the reason.
 die() { say error "$1"; exit 0; }
 oneline() { printf '%s' "$1" | tr '\n' ' ' | cut -c1-300; }
 

@@ -1,7 +1,7 @@
 //! Where a task goes next.
 //!
 //! Pure: config plus a task row in, one decision out. The engine decides nothing
-//! a human didn't write down (PLAN §1), so this file has no I/O, no clock and no
+//! a human didn't write down, so this file has no I/O, no clock and no
 //! opinions — every branch it takes comes from the config it was handed.
 
 use crate::Outcome;
@@ -21,7 +21,7 @@ pub enum Plan {
     /// Every pipeline of the type is done.
     Finish,
     /// Nothing can proceed. Parking is inert: the task sits there until
-    /// `shep retry` (PLAN §1).
+    /// `shep retry`.
     Park { reason: String },
 }
 
@@ -90,7 +90,7 @@ pub fn after_pass(policy: &Policy, task: &Task) -> Plan {
 
 /// Where a task goes when its current step rejects.
 ///
-/// The pipeline owns its loop and its cap (PLAN §2), so this is entirely a
+/// The pipeline owns its loop and its cap, so this is entirely a
 /// question about the pipeline the task is in: it has somewhere for a rejection to
 /// go, or it does not, and it has rounds left, or it is spent.
 pub fn after_fail(policy: &Policy, task: &Task) -> Plan {
@@ -216,7 +216,7 @@ impl<'a> Planner<'a> {
     /// A pipeline whose own outcome is `reject`.
     ///
     /// At the top of a type that is the end of the road: a type is a composition
-    /// with no loops (PLAN §2), so there is nothing to send it back to and the task
+    /// with no loops, so there is nothing to send it back to and the task
     /// parks with what it was. Nested, the rejection would be its parent step's —
     /// but validation forbids nesting inside a looping pipeline, so the parent has
     /// no on_fail either, and parking is the honest answer there too.

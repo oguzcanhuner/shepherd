@@ -299,7 +299,7 @@ fn a_closed_workspace_resolves_the_task_it_took_with_it() {
     let (task, mut inflight) = awaiting(&store, &repo, "watched");
     check_for(&store, &task, Conclusion::Pass);
 
-    // Closing a workspace fires no pane events at all (NOTES.md), and the payload
+    // Closing a workspace fires no pane events at all, and the payload
     // has no pane id — only the workspace the task recorded when it bound.
     herdr_said(&store, &workspace_closed("wZ"));
     let finished = settle(&store, &task.id, &mut inflight);
@@ -632,7 +632,7 @@ fn a_check_carries_the_body_it_was_given() {
     repo.git_init();
     let (task, _inflight) = awaiting(&store, &repo, "watched");
 
-    // Body on stdin (PLAN §7.3), which is how an agent hands over a paragraph.
+    // Body on stdin, which is how an agent hands over a paragraph.
     let mut child = std::process::Command::new(SHEP)
         .args(["--db"])
         .arg(store.path())
@@ -726,7 +726,7 @@ fn the_store_is_reachable_from_a_step_by_the_environment_alone() {
     let (task, _inflight) = awaiting(&store, &repo, "watched");
 
     // `launch.sh` reached back in with no --db and no --task: everything it needed
-    // was in the environment the contract promises (PLAN §7.1).
+    // was in the environment the contract promises.
     let conn = store.conn();
     let bound = pane::for_task(&conn, &task.id).expect("pane");
     assert_eq!(bound, Some(format!("wZ:{}", task.id)));

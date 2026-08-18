@@ -5,7 +5,7 @@ use std::path::Path;
 
 /// `shep retry <task>` — re-queue a parked task. A stuck task sits there until
 /// this is run; the failure is inert, which is why there is no reconciliation
-/// loop (PLAN §1).
+/// loop.
 pub fn run(db_path: &Path, task_id: &str) -> Result<()> {
     let mut conn = db::open(db_path)?;
     match engine::retry(&mut conn, task_id)? {

@@ -1,7 +1,7 @@
 # Shepherd as a Herdr plugin.
 #
 # The engine lives here; policy (pipelines and step scripts) lives in the repo
-# being worked on, under .shep/ (PLAN §4).
+# being worked on, under .shep/.
 #
 # Herdr silently ignores unknown manifest fields and only *warns* on unknown
 # event names, so a typo in either fails quietly. Check what actually registered
@@ -19,13 +19,13 @@ command = ["cargo", "build", "--release"]
 
 # The supervisor. A [[startup]] failure does not stop the Herdr server, so this
 # must never exit on bad config — it starts, refuses work, and says so through
-# `shep status` (PLAN §8).
+# `shep status`.
 [[startup]]
 command = ["bash", "hooks/supervise.sh"]
 
 # The three events that can end a deferred step. `agent_status_changed` is the
 # one that matters; `exited` and `closed` cover the endings where an agent stops
-# without Herdr ever calling it `done` (PLAN §11).
+# without Herdr ever calling it `done`.
 #
 # There is no previous-status field on the payload, so the edge has to be worked
 # out from what we last saw for that pane — which is why the hook only appends

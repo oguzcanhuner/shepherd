@@ -2,7 +2,7 @@
 //!
 //! `lint.sh` for a Rails app and for a Python library are not the same script,
 //! and both should be versioned with the code they judge — so policy lives in
-//! the repo being worked on, not next to the engine (PLAN §4).
+//! the repo being worked on, not next to the engine.
 
 mod model;
 mod validate;
@@ -158,7 +158,7 @@ impl Policy {
 
     /// The filename is the registration: `steps = ["lint"]` resolves to
     /// `.shep/scripts/lint.sh`, with `~/.config/shep/scripts/` as the fallback
-    /// for project-agnostic scripts (PLAN §4).
+    /// for project-agnostic scripts.
     pub fn script_path(&self, step: &str) -> Option<PathBuf> {
         self.script_dirs
             .iter()

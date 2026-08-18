@@ -1,4 +1,4 @@
-//! The outcome vocabulary shared by the step contract (PLAN §7.1) and by config
+//! The outcome vocabulary shared by the step contract and by config
 //! (`on_exhausted`). Four words, fixed: adding a fifth would change what every
 //! step script is allowed to say.
 

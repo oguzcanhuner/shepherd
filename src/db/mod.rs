@@ -1,5 +1,5 @@
 //! The store. SQLite in WAL mode is the only IPC mechanism in the system
-//! (PLAN §3, §7.4), so every connection sets the same pragmas.
+//!, so every connection sets the same pragmas.
 
 pub mod check;
 pub mod event;
@@ -15,7 +15,7 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// How long a writer waits for the write lock before giving up. Concurrent
-/// writers must wait rather than see `SQLITE_BUSY` (PLAN §7.4).
+/// writers must wait rather than see `SQLITE_BUSY`.
 pub const BUSY_TIMEOUT_MS: u32 = 10_000;
 
 /// Seconds since the epoch. Every timestamp in the store is this.
@@ -65,7 +65,7 @@ fn configure(conn: &Connection) -> Result<()> {
 }
 
 /// Begin a write transaction. `BEGIN IMMEDIATE` takes the write lock up front so
-/// that concurrent writers serialize instead of failing at commit (PLAN §6).
+/// that concurrent writers serialize instead of failing at commit.
 pub fn write_tx(conn: &mut Connection) -> Result<rusqlite::Transaction<'_>> {
     Ok(conn.transaction_with_behavior(TransactionBehavior::Immediate)?)
 }

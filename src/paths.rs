@@ -21,7 +21,7 @@ pub fn state_dir() -> PathBuf {
 
 /// The store path: `$SHEP_DB` if set, else `<state_dir>/shep.db`.
 ///
-/// `$SHEP_DB` is exported into every step script (PLAN §7.1) so that `shep`
+/// `$SHEP_DB` is exported into every step script so that `shep`
 /// subcommands a script invokes hit the same store the supervisor is driving.
 pub fn db_path() -> PathBuf {
     env_path(DB_ENV).unwrap_or_else(|| state_dir().join("shep.db"))
@@ -40,7 +40,7 @@ pub fn shep_bin() -> Option<PathBuf> {
 
 /// Supervisor log file, kept beside the store so an alternate `$SHEP_DB` gets
 /// its own log. Hook and step stdout is not a terminal, so logs go to a file
-/// rather than to stdout (PLAN §3).
+/// rather than to stdout.
 pub fn log_path() -> PathBuf {
     log_path_for(&db_path())
 }

@@ -6,7 +6,7 @@
 # interactive prompt before an agent can be started in it. So: worktree, split,
 # bind, start, prompt — and then get out of the way. This step returns `started`,
 # which is a promise; what redeems it is the agent going `done`, and the answer
-# comes from the check it leaves behind (PLAN §7.2).
+# comes from the check it leaves behind.
 #
 # Every stage is skippable, because a retry runs this again: a task that already has
 # a pane must not get a second worktree.
@@ -21,7 +21,7 @@ branch=${SHEP_BRANCH:-shep/$SHEP_TASK_ID}
 base=${SHEP_BASE:-$(git -C "$SHEP_REPO" rev-parse --abbrev-ref HEAD)}
 agent_kind=${SHEP_AGENT_KIND:-claude}
 # Autonomy flags go after `--`, or an unattended agent parks in `blocked` on its
-# first approval prompt (PLAN §11). It has to be able to run one command at the
+# first approval prompt. It has to be able to run one command at the
 # end — `shep check submit` is how the step gets its answer — so a mode that asks
 # before running commands would deadlock the step by design. Narrow it per repo if
 # you would rather: SHEP_AGENT_FLAGS='--permission-mode acceptEdits'.
@@ -74,7 +74,7 @@ else
   [ -n "$pane" ] || die "herdr did not say which pane it split"
 
   # Bind before starting the agent: the binding is what makes the status events
-  # that follow attributable to this task (PLAN §6).
+  # that follow attributable to this task.
   "$shep" bind-pane "$pane" --workspace "$workspace" --worktree "$worktree" \
     --branch "$branch" --base "$base" || die "could not bind pane $pane"
 fi
@@ -101,7 +101,7 @@ else
 fi
 
 # The script owns the prompt, not the engine: this wording is the whole
-# difference between an implementation step and a review one (PLAN §7.5).
+# difference between an implementation step and a review one.
 read -r -d '' prompt <<PROMPT
 Run \`$shep context\` — that is your brief and the whole of your instructions. You are working alone in this worktree on branch $branch; nobody will answer questions, so make the call yourself and get it done.
 

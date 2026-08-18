@@ -1,4 +1,4 @@
-//! M3 acceptance: every rule in PLAN §8 has a test, and a broken config yields a
+//! Config acceptance: every validation rule has a test, and a broken config yields a
 //! usable error rather than a panic.
 
 mod common;
@@ -6,8 +6,8 @@ mod common;
 use common::{Repo, make_executable};
 use shepherd::config::{Await, Policy, StepKind};
 
-/// The config from PLAN §5, which must parse and validate as written.
-const PLAN_EXAMPLE: &str = r#"
+/// The example config from docs/configuration.md, which must parse and validate as written.
+const EXAMPLE_CONFIG: &str = r#"
 [pipeline.implement]
 steps = ["code"]
 await = "agent_stopped"
@@ -54,7 +54,7 @@ fn plan_repo() -> Repo {
 fn the_config_from_the_plan_is_valid() {
     let repo = plan_repo();
     let policy = repo
-        .load(PLAN_EXAMPLE)
+        .load(EXAMPLE_CONFIG)
         .expect("the plan's own example must validate");
 
     assert_eq!(policy.config.pipeline.len(), 4);
@@ -82,7 +82,7 @@ fn the_config_from_the_plan_is_valid() {
 #[test]
 fn steps_resolve_to_scripts_by_filename() {
     let repo = plan_repo();
-    let policy = repo.load(PLAN_EXAMPLE).expect("valid");
+    let policy = repo.load(EXAMPLE_CONFIG).expect("valid");
 
     match policy.step_kind("lint") {
         Some(StepKind::Script(path)) => {
@@ -224,7 +224,7 @@ fn rule_on_fail_names_a_step_of_this_pipelines_machine() {
     // Naming it in on_fail is what makes `fix` a step of this pipeline. It is
     // deliberately absent from `steps`: a repair step that ran in the forward
     // sequence would run when nothing was wrong. This is the shape of the
-    // review pipeline in PLAN §5.
+    // example review pipeline.
     repo.load(
         r#"
 [pipeline.review]
@@ -511,7 +511,7 @@ fn positions_are_names_so_names_must_be_unique() {
     let repo = Repo::new();
     repo.script("lint").script("fix");
 
-    // A task records its step by name (PLAN §6), so a repeat leaves the engine
+    // A task records its step by name, so a repeat leaves the engine
     // unable to say where it is.
     let problems = repo.problems(
         r#"
@@ -640,7 +640,7 @@ fn a_missing_config_says_what_is_missing_and_where() {
 #[test]
 fn an_unknown_type_returns_the_menu() {
     let repo = plan_repo();
-    let policy = repo.load(PLAN_EXAMPLE).expect("valid");
+    let policy = repo.load(EXAMPLE_CONFIG).expect("valid");
 
     let err = policy.task_type("refactor").expect_err("no such type");
     let message = err.to_string();
@@ -680,7 +680,7 @@ pipelines = ["review"]
 
 #[test]
 fn a_home_fallback_covers_project_agnostic_scripts() {
-    // ~/.config/shep/scripts is the fallback search path (PLAN §4).
+    // ~/.config/shep/scripts is the fallback search path.
     let home = tempfile::tempdir().expect("temp dir");
     std::fs::create_dir_all(home.path().join(".config/shep/scripts")).expect("mkdir");
     let shared = home.path().join(".config/shep/scripts/lint.sh");
@@ -766,7 +766,7 @@ fn rule_a_looping_pipeline_may_not_nest_another() {
     let repo = Repo::new();
     repo.script("lint").script("fix").script("deep");
 
-    // A task records one round, scoped to the innermost pipeline (PLAN §6).
+    // A task records one round, scoped to the innermost pipeline.
     // Descending would overwrite the round the loop is counting.
     let problems = repo.problems(
         r#"

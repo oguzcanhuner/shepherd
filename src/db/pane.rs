@@ -1,6 +1,6 @@
 //! The `pane_task` table: which Herdr pane belongs to which task.
 //!
-//! It earns its keep twice (PLAN §6): it makes a Herdr event attributable to a
+//! It earns its keep twice: it makes a Herdr event attributable to a
 //! task, and it lets a bare `shep context` resolve its own task from
 //! `$HERDR_PANE_ID`.
 

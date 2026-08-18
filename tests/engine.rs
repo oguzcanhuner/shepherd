@@ -347,7 +347,7 @@ fn an_orphaned_synchronous_step_is_requeued() {
 
     // A task stuck in `running`, as a supervisor that died mid-step would leave
     // it. Its pipeline has no `await`, so nothing but the supervisor was ever
-    // going to report on it (PLAN §11).
+    // going to report on it.
     let orphan = store.task_in(&root, "simple", "orphaned");
     let mut conn = store.conn();
     engine::transition(&mut conn, &orphan.id, |_| {

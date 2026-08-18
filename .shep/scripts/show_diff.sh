@@ -4,7 +4,7 @@
 # The one step that ends by asking for a person. It splits a pane, focuses it —
 # unlike everything else here, which works with --no-focus — shows the diff, and
 # notifies. Then it returns `started`, and nothing but `shep approve` or
-# `shep reject` will move the task (PLAN §7.2).
+# `shep reject` will move the task.
 set -uo pipefail
 lib="$(dirname -- "$0")/lib.sh"
 # shellcheck source=lib.sh

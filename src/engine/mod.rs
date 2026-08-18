@@ -1,6 +1,6 @@
 //! The state machine. Every write to a task goes through here, because the CLI
 //! and the supervisor are both writers and consistency comes from shared code
-//! rather than from a transport (PLAN §7.4).
+//! rather than from a transport.
 
 mod plan;
 pub mod resolve;
@@ -26,7 +26,7 @@ use std::path::Path;
 
 /// Create a task: one `BEGIN IMMEDIATE` transaction that allocates the id,
 /// inserts the row and writes `task.created`. State and event commit together,
-/// always (PLAN §6).
+/// always.
 pub fn create_task(conn: &mut Connection, new: task::NewTask) -> Result<Task> {
     let tx = db::write_tx(conn)?;
     let now = db::now();
@@ -78,7 +78,7 @@ pub enum Started {
 ///
 /// `queued` means "ready to run its next step" and `running` means "a step is in
 /// flight right now". Keeping those apart is what makes recovery decidable: a
-/// task left `running` with no pane was synchronous and got orphaned (PLAN §11).
+/// task left `running` with no pane was synchronous and got orphaned.
 pub fn begin_step(
     conn: &mut Connection,
     policy: &Policy,
@@ -140,7 +140,7 @@ pub fn begin_step(
 /// Record what a step said, and move the task accordingly.
 ///
 /// One transaction: the step finishing and whatever it leads to commit together,
-/// so there is never an event for a change that didn't persist (PLAN §6).
+/// so there is never an event for a change that didn't persist.
 pub fn finish_step(
     conn: &mut Connection,
     policy: &Policy,
@@ -177,7 +177,7 @@ pub fn finish_step(
             )),
 
             // A rejection is a verdict, not a failure: where it goes is the
-            // pipeline's `on_fail`, bounded by its `max_rounds` (PLAN §5).
+            // pipeline's `on_fail`, bounded by its `max_rounds`.
             Outcome::Reject => advance_to(&plan::after_fail(policy, task)),
 
             // A promise, not an answer. What resolves it is the pipeline's await.
@@ -191,7 +191,7 @@ pub fn finish_step(
                     // `human_owned` is the muting: status events for its pane are
                     // still written to `raw_event`, but advance nothing, so you can
                     // talk to the agent without the state machine moving under you
-                    // (PLAN §7.2).
+                    //.
                     Some(await_on) => {
                         Decision::apply(TaskPatch::new().human_owned(await_on == Await::Human))
                             .with_event(
@@ -233,7 +233,7 @@ pub fn finish_step(
 /// The next step is left `queued`, and the next tick starts it. That keeps the
 /// two statuses meaning one thing each — `queued` is "ready to run its next
 /// step", `running` is "a step is in flight" — which is what makes orphan
-/// recovery decidable (PLAN §11). The cost is one poll interval between steps.
+/// recovery decidable. The cost is one poll interval between steps.
 fn advance_to(plan: &Plan) -> Decision {
     match plan {
         Plan::Run {
@@ -285,7 +285,7 @@ fn start_or_settle(plan: &Plan) -> Decision {
 }
 
 /// Parking is the answer to everything the engine cannot decide. It is inert: the
-/// task sits there until `shep retry` (PLAN §1).
+/// task sits there until `shep retry`.
 fn park(reason: impl Into<String>) -> Decision {
     let reason = reason.into();
     Decision::apply(TaskPatch::new().status(Status::Parked)).with_event(
@@ -351,7 +351,7 @@ pub fn retry(conn: &mut Connection, task_id: &str) -> Result<TransitionOutcome> 
 /// `shep approve` / `shep reject` — the only things that resolve a handoff.
 ///
 /// The verdict is written as a check first, because a person approving a change is
-/// a verdict about a commit like any other (PLAN §2) — and it is what `integrate`
+/// a verdict about a commit like any other — and it is what `integrate`
 /// will insist on. Then the step is finished with it, which is the same path a
 /// script's verdict takes.
 pub fn settle_by_human(
@@ -506,7 +506,7 @@ impl Binding {
 /// One transaction for the `pane_task` row, the task's placement and the event.
 /// A task that thinks it has a worktree but has no pane bound is a state nothing
 /// recovers from, and the pane binding is what makes a Herdr event attributable
-/// at all (PLAN §6), so the two must not be separable.
+/// at all, so the two must not be separable.
 pub fn bind_pane(
     conn: &mut Connection,
     task_id: &str,
@@ -547,7 +547,7 @@ pub fn bind_pane(
     })
 }
 
-/// What a check submitter supplies (PLAN §7.3). Notably not the sha.
+/// What a check submitter supplies. Notably not the sha.
 #[derive(Debug, Clone)]
 pub struct Submission {
     pub conclusion: Conclusion,
@@ -565,7 +565,7 @@ pub struct Submission {
 ///
 /// `shep` stamps the sha itself, from `git rev-parse HEAD` in the worktree. The
 /// submitter never supplies it, or a stale check becomes an agent-behaviour bug
-/// instead of an impossible state (PLAN §7.3).
+/// instead of an impossible state.
 pub fn submit_check(conn: &mut Connection, task_id: &str, sub: &Submission) -> Result<Check> {
     let task = task::require(conn, task_id)?;
     let at = sub.at.clone().or_else(|| StepAt::of(&task));
@@ -579,7 +579,7 @@ pub fn submit_check(conn: &mut Connection, task_id: &str, sub: &Submission) -> R
     // never got a worktree of its own is still a check about a commit.
     let dir = task.worktree.clone().unwrap_or_else(|| task.repo.clone());
     // Outside the transaction, on purpose: never hold one open across a
-    // subprocess (PLAN §7.4).
+    // subprocess.
     let sha = crate::git::head_sha(Path::new(&dir))?;
 
     let new = NewCheck {
@@ -618,7 +618,7 @@ pub fn submit_check(conn: &mut Connection, task_id: &str, sub: &Submission) -> R
 /// Requeue steps that were in flight when the supervisor died.
 ///
 /// A synchronous step died with the supervisor and has to be run again; a
-/// deferred one is still out there and must be left alone (PLAN §11). PLAN reads
+/// deferred one is still out there and must be left alone. The original design read
 /// that difference off the pane binding, but a task keeps its agent pane after
 /// `implement` resolves — `shep context` has to keep working in it, and `handoff`
 /// wants to talk to the same agent — so the config is the better witness: what a
@@ -688,7 +688,7 @@ pub fn awaits_human(policy: &Policy, pipeline: &str) -> bool {
 
 /// The policy governing a task, loaded from the repo it belongs to.
 ///
-/// Loaded per task rather than once, because config is per repo root (PLAN §4)
+/// Loaded per task rather than once, because config is per repo root
 /// and two tasks in flight may be governed by different files.
 pub fn policy_for(task: &Task) -> Result<Policy> {
     Policy::load(Path::new(&task.repo))

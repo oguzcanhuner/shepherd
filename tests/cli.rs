@@ -179,7 +179,7 @@ fn a_task_can_be_cancelled() {
     .to_string();
 
     // No supervisor running, so nothing has started it: cancelling is just a
-    // transaction (PLAN §7.4).
+    // transaction.
     assert!(ok(&db, &["cancel", &task, "--reason", "changed my mind"]).contains("cancelled"));
 
     let detail: serde_json::Value =
@@ -253,7 +253,7 @@ fn create_then_list_then_pause() {
     assert_eq!(status_json(&db)["paused"], false);
 }
 
-/// A repo with the config from PLAN §5, for the commands that read policy.
+/// A repo with the example config, for the commands that read policy.
 fn policy_repo() -> common::Repo {
     let repo = common::Repo::new();
     for step in [
@@ -491,7 +491,7 @@ fn a_task_created_while_the_supervisor_runs_is_seen_by_it() {
     wait_for_supervisor(&db, "running");
 
     // No IPC: the create is a transaction, and the supervisor notices on its
-    // next poll (PLAN §7.4).
+    // next poll.
     let repo = policy_repo();
     ok(
         &db,

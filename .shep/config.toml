@@ -1,6 +1,6 @@
 # Shepherd's own policy — this repo is its own first target.
 #
-# Engine in the plugin, policy in the repo (PLAN §4): these scripts judge this
+# Engine in the plugin, policy in the repo: these scripts judge this
 # codebase, so they are versioned with it.
 
 # Lint, test, then a reading by an agent with no stake in the work. All three are
@@ -8,7 +8,7 @@
 #
 # A rejection from any of them goes to `fix`, which re-prompts the agent already in
 # the task's pane; then the whole pipeline runs again, which is what decides whether
-# the repair worked. Three rounds, and then it stops asking (PLAN §5).
+# the repair worked. Three rounds, and then it stops asking.
 [pipeline.review]
 steps        = ["lint", "test", "agent_review"]
 on_fail      = "fix"
@@ -17,14 +17,14 @@ on_exhausted = "reject"
 
 # An agent in a pane, in a worktree of its own. `code` returns `started` and the
 # task waits; what resolves it is that agent stopping, and the verdict is the
-# check it left behind (PLAN §7.2).
+# check it left behind.
 [pipeline.implement]
 steps = ["code"]
 await = "agent_stopped"
 
 # Hand it over. `show_diff` splits a pane, focuses it and notifies; then nothing
 # happens at all until you say so — not even the agent going busy in its own pane
-# (PLAN §7.2).
+#.
 [pipeline.handoff]
 steps = ["show_diff"]
 await = "human"

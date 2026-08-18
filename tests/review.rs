@@ -3,7 +3,7 @@
 //! loops twice and then exhausts.
 //!
 //! No agents in here. What `agent_review` and `fix` are is a script's business
-//! (PLAN §7.5); what a rejection *means* is the engine's, and that is what these
+//!; what a rejection *means* is the engine's, and that is what these
 //! test.
 
 mod common;
@@ -139,7 +139,7 @@ fn a_rejection_goes_to_the_repair_step_and_round_again() {
             "review/lint round 1",
             "review/test round 1",
             // A new pipeline starts its own count: round is scoped to the
-            // innermost pipeline (PLAN §2).
+            // innermost pipeline.
             "after/ship round 0",
         ]
     );

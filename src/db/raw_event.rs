@@ -1,6 +1,6 @@
 //! The `raw_event` table: what Herdr said, as it said it.
 //!
-//! The hook's whole job is to append here (PLAN §M2). Interpretation — which
+//! The hook's whole job is to append here. Interpretation — which
 //! pane, which task, whether this is the `working` → `done` edge — happens later
 //! in the supervisor, because the payload carries no previous status and a hook
 //! that decided things would have to keep state of its own.

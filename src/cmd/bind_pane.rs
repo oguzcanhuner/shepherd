@@ -8,7 +8,7 @@ use std::path::Path;
 /// Run by a step script once it has a pane, before it starts an agent in it. The
 /// binding is what makes a Herdr event attributable to a task, so it has to exist
 /// before the agent does — otherwise the first status change is about a pane
-/// nobody claims (PLAN §6).
+/// nobody claims.
 #[allow(clippy::too_many_arguments)]
 pub fn run(
     db_path: &Path,

@@ -1,6 +1,6 @@
 //! The `meta` table: small facts that are not tasks. The supervisor heartbeat
 //! and the pause flag live here — `shep pause` writes a row, the supervisor
-//! reads it each tick (PLAN §7.4).
+//! reads it each tick.
 
 use crate::{Error, Result};
 use rusqlite::Connection;
@@ -8,7 +8,7 @@ use rusqlite::Connection;
 pub const HEARTBEAT: &str = "supervisor.heartbeat";
 pub const PAUSED: &str = "paused";
 /// How far the supervisor has read into `raw_event`. What Herdr said is a log,
-/// and this is the only reader's place in it (PLAN §7.2).
+/// and this is the only reader's place in it.
 pub const RAW_CURSOR: &str = "raw_event.cursor";
 
 pub fn get(conn: &Connection, key: &str) -> Result<Option<String>> {

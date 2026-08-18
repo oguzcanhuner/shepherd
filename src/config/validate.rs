@@ -1,4 +1,4 @@
-//! The validation rules of PLAN §8, plus three the data model forces.
+//! The config validation rules, plus three the data model forces.
 //!
 //! Every rule reports rather than returns, so one pass tells you everything
 //! that is wrong with a config instead of the first thing.
@@ -52,7 +52,7 @@ pub fn validate(policy: &Policy) -> Vec<Problem> {
             problems.push(Problem::new(&at, "no steps, so this pipeline does nothing"));
         }
 
-        // `task.step` records a step by name (PLAN §6), so a name appearing twice
+        // `task.step` records a step by name, so a name appearing twice
         // in one pipeline leaves the engine unable to say where it is.
         for duplicate in duplicates(&pipeline.steps) {
             problems.push(
@@ -154,7 +154,7 @@ pub fn validate(policy: &Policy) -> Vec<Problem> {
             );
         }
         if pipeline.loops() {
-            // A task records one round (PLAN §6), scoped to the innermost
+            // A task records one round, scoped to the innermost
             // pipeline. Descending into a nested pipeline from a looping one
             // would overwrite the round the loop is counting, so the two cannot
             // be combined.

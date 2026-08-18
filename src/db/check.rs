@@ -1,9 +1,9 @@
 //! The `check_run` table: a verdict plus evidence about a specific commit.
 //!
-//! Written by linters, test runs, reviewing agents and humans alike (PLAN §2).
+//! Written by linters, test runs, reviewing agents and humans alike.
 //! `sha` is load-bearing: a check is a verdict about a particular state of the
 //! code, so `integrate` must refuse to pass on a check whose sha isn't head, or a
-//! stale pass waves a bad merge through (PLAN §6).
+//! stale pass waves a bad merge through.
 
 use crate::{Error, Result};
 use rusqlite::Connection;
@@ -57,7 +57,7 @@ pub struct Check {
 
 /// What a submitter supplies. Notably not the sha: `shep` stamps that itself, or
 /// a stale check becomes an agent-behaviour bug instead of an impossible state
-/// (PLAN §7.3).
+///.
 #[derive(Debug, Clone)]
 pub struct NewCheck {
     pub task_id: String,
@@ -153,7 +153,7 @@ pub fn for_task(conn: &Connection, task_id: &str) -> Result<Vec<Check>> {
 }
 
 /// The check that resolves a deferred step: the latest for this task, pipeline,
-/// step and round. No check means the step errored (PLAN §7.2).
+/// step and round. No check means the step errored.
 pub fn latest_for_step(
     conn: &Connection,
     task_id: &str,

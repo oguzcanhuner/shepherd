@@ -5,7 +5,7 @@ use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
 
 /// `shep create --type feature "..."` — INSERT task + event, status = queued.
-/// The supervisor picks it up on its next poll (PLAN §7.4).
+/// The supervisor picks it up on its next poll.
 pub fn run(
     db_path: &Path,
     kind: &str,

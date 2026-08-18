@@ -1,4 +1,4 @@
-//! The config schema of PLAN §5. `deny_unknown_fields` throughout: a typo must
+//! The config schema. `deny_unknown_fields` throughout: a typo must
 //! be an error, not silence.
 
 use crate::outcome::Outcome;
@@ -56,12 +56,12 @@ impl Pipeline {
     }
 }
 
-/// `await` values (PLAN §5).
+/// `await` values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Await {
     /// The pane's agent going `done`, or the pane exiting. The outcome then comes
-    /// from the latest matching check_run (PLAN §7.2).
+    /// from the latest matching check_run.
     AgentStopped,
     /// Nothing resolves it but `shep approve` / `shep reject`.
     Human,

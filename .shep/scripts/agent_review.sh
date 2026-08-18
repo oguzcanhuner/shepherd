@@ -3,7 +3,7 @@
 #
 # Headless, so it is an ordinary synchronous step: no pane, no await, and the
 # verdict is this script's last line. The check it writes is the durable record —
-# `integrate` will refuse to merge on a check whose sha is not head (PLAN §6).
+# `integrate` will refuse to merge on a check whose sha is not head.
 set -uo pipefail
 lib="$(dirname -- "$0")/lib.sh"
 # shellcheck source=lib.sh
@@ -33,7 +33,7 @@ brief=$("$shep" context 2>/dev/null || echo "(no brief available)")
 branch=${SHEP_BRANCH:-HEAD}
 
 # The script owns the prompt, and this wording is the whole difference between a
-# review step and an implementation one (PLAN §7.5). The last line is the verdict,
+# review step and an implementation one. The last line is the verdict,
 # for the same reason a step's last line is: everything above it is reasoning.
 read -r -d '' prompt <<PROMPT
 You are reviewing someone else's work on branch $branch, against $base. You did not write it and you are not being asked to fix it.

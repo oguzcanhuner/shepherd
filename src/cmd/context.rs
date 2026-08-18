@@ -4,7 +4,7 @@ use std::path::Path;
 
 /// `shep context` — my brief.
 ///
-/// One of exactly three things an agent in a pane knows about (PLAN §7.5), and a
+/// One of exactly three things an agent in a pane knows about, and a
 /// pure read against a database file: there is nothing here for an agent to
 /// connect to and nothing to be down.
 pub fn run(db_path: &Path, task: Option<String>, json: bool) -> Result<()> {

@@ -20,7 +20,7 @@ if printf '%s' "$clippy_out" | grep -qE '^warning'; then
 fi
 
 # The verdict is also a check: a durable record of what was true of this commit,
-# which is what `integrate` will insist on later (PLAN §6).
+# which is what `integrate` will insist on later.
 submit() {
   # Runnable by hand, which is how you debug it: with no task there is nothing to
   # write a check about.

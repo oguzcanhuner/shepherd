@@ -1,6 +1,6 @@
 //! The supervisor: heartbeat, pause flag, and the poll loop.
 //!
-//! There is no socket and no server (PLAN §7.4). The supervisor's whole job is
+//! There is no socket and no server. The supervisor's whole job is
 //! to poll the store, spawn step scripts and block on them, so aliveness is a
 //! row in `meta` rather than a connection you can dial.
 
@@ -140,7 +140,7 @@ pub struct Tick {
 ///
 /// One thread per in-flight step, blocking on `child.wait()`. At three or four
 /// concurrent tasks that is cheaper and far simpler than an async runtime
-/// (PLAN §3).
+///.
 #[derive(Default)]
 pub struct Inflight {
     threads: HashMap<String, JoinHandle<()>>,
@@ -267,7 +267,7 @@ fn start_one(
 
 /// Run a step to completion, then record what it said.
 ///
-/// This is the whole of the supervisor's work: spawn, block, write (PLAN §3).
+/// This is the whole of the supervisor's work: spawn, block, write.
 fn run_and_report(db_path: PathBuf, policy: Policy, spec: Box<engine::StepSpec>, task_id: String) {
     let report = engine::run_step(&spec);
     if !report.logs.trim().is_empty() {
@@ -368,7 +368,7 @@ pub fn run(conn: &mut Connection, poll: Duration, max_ticks: Option<u64>) -> Res
     tracing::info!(pid = std::process::id(), seq, "supervisor started");
 
     // A task left `running` with no bound pane was synchronous and got orphaned
-    // when the last supervisor stopped (PLAN §11).
+    // when the last supervisor stopped.
     let db_path = PathBuf::from(
         conn.path()
             .ok_or_else(|| Error::other("the store has no path, so steps could not find it"))?,

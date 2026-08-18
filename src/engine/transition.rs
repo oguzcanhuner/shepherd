@@ -8,7 +8,7 @@
 //!
 //! This is why there is no optimistic version column and no lock file. SQLite
 //! serializes the transactions; re-reading inside one makes the read-modify-write
-//! atomic (PLAN §6).
+//! atomic.
 
 use crate::db::{self, event::NewEvent, task};
 use crate::{Error, Result};

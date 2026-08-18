@@ -1,7 +1,7 @@
 //! The little bit of git the engine does itself.
 //!
 //! Worktree creation belongs to a step script, because `herdr worktree create`
-//! makes the workspace at the same time and that is Herdr's business (PLAN §M5).
+//! makes the workspace at the same time and that is Herdr's business.
 //! What is left here is what the engine has to know for itself: which commit a
 //! check is a verdict about.
 
@@ -13,7 +13,7 @@ use std::process::Command;
 ///
 /// This is how `sha` gets onto a `check_run`: the submitter never supplies it,
 /// or a stale check becomes an agent-behaviour bug instead of an impossible
-/// state (PLAN §7.3).
+/// state.
 pub fn head_sha(dir: &Path) -> Result<String> {
     let out = Command::new("git")
         .args(["rev-parse", "HEAD"])

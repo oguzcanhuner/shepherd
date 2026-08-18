@@ -65,7 +65,7 @@ impl Repo {
         self.dir.path()
     }
 
-    /// The filename is the registration (PLAN §4), so making a step means making
+    /// The filename is the registration, so making a step means making
     /// an executable file.
     pub fn script(&self, name: &str) -> &Repo {
         let path = self.dir.path().join(format!(".shep/scripts/{name}.sh"));

@@ -3,7 +3,7 @@ use anyhow::Result;
 use std::path::Path;
 
 /// `shep types` — the menu. This exists so an agent can choose, which is why
-/// `description` lives on types and nowhere else (PLAN §5).
+/// `description` lives on types and nowhere else.
 pub fn run(repo: &Path, json: bool) -> Result<()> {
     let policy = Policy::load(repo)?;
 

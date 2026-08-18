@@ -1,10 +1,10 @@
 //! The `event` table: an append-only audit trail. Nothing reads it to make a
-//! decision (PLAN §1), so its only jobs are `shep trace` and knowing what
+//! decision, so its only jobs are `shep trace` and knowing what
 //! happened.
 //!
 //! Event names are fixed and few. A step called `lint` finishing emits
 //! `task.step_finished {step: "lint", ...}`, never `lint.finished` — otherwise
-//! editing config mints new protocol (PLAN §6).
+//! editing config mints new protocol.
 
 use crate::Result;
 use rusqlite::Connection;

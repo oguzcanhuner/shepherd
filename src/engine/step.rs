@@ -1,4 +1,4 @@
-//! The step script contract (PLAN §7.1).
+//! The step script contract.
 //!
 //! In: environment. Out: the last line of stdout is one JSON object. Everything
 //! above it is logs, so a script is free to shell out to `pytest` or `claude -p`
@@ -145,7 +145,7 @@ pub struct StepReport {
 
 impl StepReport {
     /// A verdict reached without running anything: what resolving a deferred step
-    /// produces (PLAN §7.2). There is no exit code and no output, because no
+    /// produces. There is no exit code and no output, because no
     /// process was involved — the answer came from a `check_run` row.
     pub fn verdict(outcome: Outcome, note: impl Into<String>) -> StepReport {
         StepReport {
@@ -183,7 +183,7 @@ struct Verdict {
 ///
 /// Blocking on purpose: the supervisor gives each in-flight step a thread and
 /// waits on the child, which at three or four concurrent tasks is cheaper and far
-/// simpler than an async runtime (PLAN §3).
+/// simpler than an async runtime.
 pub fn run(spec: &StepSpec) -> StepReport {
     let mut command = Command::new(&spec.script);
     command.current_dir(&spec.cwd);
@@ -243,7 +243,7 @@ pub fn run(spec: &StepSpec) -> StepReport {
     }
 }
 
-/// The environment of PLAN §7.1, plus whatever Herdr injected into the supervisor.
+/// The step-script environment contract, plus whatever Herdr injected into the supervisor.
 pub fn environment(spec: &StepSpec) -> Vec<(String, String)> {
     let mut env = vec![
         ("SHEP_TASK_ID".to_string(), spec.task_id.clone()),

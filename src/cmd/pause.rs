@@ -2,7 +2,7 @@ use crate::db::{self, meta};
 use anyhow::Result;
 use std::path::Path;
 
-/// Pause and resume are a flag row the supervisor reads each tick (PLAN §7.4).
+/// Pause and resume are a flag row the supervisor reads each tick.
 pub fn run(db_path: &Path, paused: bool) -> Result<()> {
     let conn = db::open(db_path)?;
     let was = meta::is_paused(&conn)?;

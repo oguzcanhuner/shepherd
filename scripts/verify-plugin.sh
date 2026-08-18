@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Assert that Herdr registered what herdr-plugin.toml says (PLAN §8).
+# Assert that Herdr registered what herdr-plugin.toml says.
 #
 # Worth having as a script rather than a habit: unknown manifest fields are
 # ignored silently and unknown event names only warn, so the failure mode this

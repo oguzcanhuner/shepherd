@@ -6,7 +6,7 @@ use crate::{Error, Result};
 use rusqlite::Connection;
 use std::path::Path;
 
-/// Migration 1 — the data model of PLAN §6, plus `meta`.
+/// Migration 1 — the data model, plus `meta`.
 const M001_INITIAL: &str = r#"
 CREATE TABLE task (
   id           TEXT PRIMARY KEY,
@@ -41,7 +41,7 @@ CREATE TABLE check_run (
   created    INTEGER NOT NULL
 ) STRICT;
 
--- The lookup that resolves a deferred step (PLAN §7.2): latest check for a
+-- The lookup that resolves a deferred step: latest check for a
 -- task + pipeline + step + round.
 CREATE INDEX check_run_lookup ON check_run(task_id, pipeline, step, round, created);
 

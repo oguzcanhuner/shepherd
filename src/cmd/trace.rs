@@ -4,7 +4,7 @@ use std::path::Path;
 
 /// `shep trace <task>` — what happened, and what each thing led to.
 ///
-/// The event table is an audit trail, not a subscription bus (PLAN §1): nothing
+/// The event table is an audit trail, not a subscription bus: nothing
 /// reads it to make a decision, and this is what it is for.
 pub fn run(db_path: &Path, task_id: &str, json: bool) -> Result<()> {
     let conn = db::open_existing(db_path)?;
