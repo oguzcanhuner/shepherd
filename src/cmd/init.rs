@@ -40,8 +40,10 @@ pipelines = ["check", "handoff"]
 # on_exhausted = "reject"
 #
 # [pipeline.implement]
-# steps = ["implement"]
-# await = "agent_stopped"        # resolves when the agent in the task's pane stops
+# steps   = ["implement"]
+# await   = "agent_stopped"      # resolves when the agent in the task's pane stops
+# on_stop = "pass"               # stopping with no recorded check counts as a pass;
+#                                # leave unset where a missing verdict is a failure
 "#;
 
 const CHECK: &str = r#"#!/usr/bin/env bash

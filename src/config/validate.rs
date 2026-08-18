@@ -143,6 +143,27 @@ pub fn validate(policy: &Policy) -> Vec<Problem> {
             );
         }
 
+        // `on_stop` is the meaning of an agent stopping without a check, so it
+        // means nothing unless an agent stopping is what resolves the pipeline.
+        if pipeline.on_stop.is_some() && pipeline.await_on != Some(Await::AgentStopped) {
+            problems.push(
+                Problem::new(
+                    &at,
+                    "on_stop is set but await is not \"agent_stopped\", so no stop ever resolves it",
+                )
+                .hint("set await = \"agent_stopped\", or drop on_stop"),
+            );
+        }
+        if pipeline.on_stop == Some(Outcome::Started) {
+            problems.push(
+                Problem::new(
+                    &at,
+                    "on_stop = \"started\" would leave the step waiting for the wait that just ended",
+                )
+                .hint("use pass, reject or error"),
+            );
+        }
+
         // Rule: no await = "human" inside a loop, or the loop asks you N times.
         if pipeline.loops() && pipeline.await_on == Some(Await::Human) {
             problems.push(

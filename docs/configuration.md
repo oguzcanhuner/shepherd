@@ -51,7 +51,21 @@ on their own:
 
 - `agent_stopped` — the pipeline resolves when Herdr reports that the task's
   agent has stopped. The result comes from the latest recorded check for that
-  step; a missing check counts as an error.
+  step. A missing check counts as an error, unless the pipeline sets
+  `on_stop`:
+
+  ```toml
+  [pipeline.implement]
+  steps   = ["code"]
+  await   = "agent_stopped"
+  on_stop = "pass"    # stopping with no check is this pipeline's pass
+  ```
+
+  `on_stop` is for pipelines whose work a *later* pipeline judges — an
+  implement step does not grade itself. A recorded check always wins over
+  `on_stop`, so an agent can still fail explicitly. Leave it unset for
+  pipelines whose verdict is the point (a review), where an agent stopping
+  silently is a failure.
 - `human` — the pipeline resolves when you run `shep approve` or `shep reject`.
   While it waits, the task is marked as yours: agent status changes in its pane
   are logged and otherwise ignored, so you can converse freely.

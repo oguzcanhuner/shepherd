@@ -163,6 +163,8 @@ every edit, run `shep validate` — it lists every problem at once, with hints.
     max_rounds   = 3            # required whenever on_fail is set
     on_exhausted = "reject"     # the pipeline's outcome when max_rounds is spent
     await        = "human"      # optional: "human" or "agent_stopped"
+    on_stop      = "pass"       # optional, agent_stopped only: what a stop with
+                                # no check means (default: error)
 
     [type.<name>]
     description = "Shown in `shep types`; write it for the person choosing."
@@ -210,9 +212,14 @@ starts an agent, and reports `started`:
 
 The prompt is what differentiates steps: an implement step says "implement",
 a review step says "review and record a verdict". When the pipeline resolves,
-its result comes from the latest check recorded for that step, so a reviewing
-agent must be told to run `shep check submit --pass` or `--fail` (body on
-stdin) before it stops. A missing check resolves as an error.
+its result comes from the latest check recorded for that step; when there is
+no check, from the pipeline's `on_stop`; and with neither, it is an error.
+
+Use `on_stop = "pass"` for producing pipelines (implement): the agent just
+works and stops, and the next pipeline judges the result. Leave it unset for
+judging pipelines (review): tell that agent to run `shep check submit --pass`
+or `--fail` (body on stdin) before it stops, because a reviewer stopping
+without a verdict is a failure. A recorded check always wins over `on_stop`.
 
 ## Design rules
 

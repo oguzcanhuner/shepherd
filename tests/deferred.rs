@@ -254,6 +254,78 @@ fn an_agent_that_stops_without_a_check_parks_the_task() {
 }
 
 #[test]
+fn on_stop_pass_lets_a_checkless_stop_advance() {
+    let store = Store::new();
+    let repo = deferred_repo(SHEP);
+    // The same workflow, but implement declares that its agent stopping is the
+    // pass: its work is judged by the next pipeline, not by itself.
+    repo.write(
+        r#"
+[pipeline.implement]
+steps = ["launch"]
+await = "agent_stopped"
+on_stop = "pass"
+
+[pipeline.after]
+steps = ["verify"]
+
+[type.watched]
+description = "An agent in a pane, then a synchronous step of its own."
+pipelines = ["implement", "after"]
+"#,
+    );
+    let (task, mut inflight) = awaiting(&store, &repo, "watched");
+    let pane = format!("wZ:{}", task.id);
+
+    herdr_said(&store, &agent_status(&pane, "working"));
+    herdr_said(&store, &agent_status(&pane, "done"));
+    let after = settle(&store, &task.id, &mut inflight);
+
+    assert_eq!(
+        after.status,
+        Status::Finished,
+        "stopping with no check is this pipeline's pass"
+    );
+    assert_eq!(repo.order(), vec!["verify"], "the next pipeline ran");
+}
+
+#[test]
+fn a_check_still_wins_over_on_stop() {
+    let store = Store::new();
+    let repo = deferred_repo(SHEP);
+    repo.write(
+        r#"
+[pipeline.implement]
+steps = ["launch"]
+await = "agent_stopped"
+on_stop = "pass"
+
+[pipeline.after]
+steps = ["verify"]
+
+[type.watched]
+description = "An agent in a pane, then a synchronous step of its own."
+pipelines = ["implement", "after"]
+"#,
+    );
+    let (task, mut inflight) = awaiting(&store, &repo, "watched");
+    // The agent said, explicitly, that it failed. on_stop must not paper over
+    // an explicit verdict.
+    check_for(&store, &task, Conclusion::Fail);
+    let pane = format!("wZ:{}", task.id);
+
+    herdr_said(&store, &agent_status(&pane, "working"));
+    herdr_said(&store, &agent_status(&pane, "done"));
+    let after = settle(&store, &task.id, &mut inflight);
+
+    assert_eq!(
+        after.status,
+        Status::Parked,
+        "an explicit fail with no on_fail in the pipeline parks"
+    );
+}
+
+#[test]
 fn a_failed_check_is_the_steps_verdict() {
     let store = Store::new();
     let repo = deferred_repo(SHEP);

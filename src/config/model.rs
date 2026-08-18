@@ -46,6 +46,14 @@ pub struct Pipeline {
     /// or a human. `await` is a Rust keyword, hence the rename.
     #[serde(default, rename = "await", skip_serializing_if = "Option::is_none")]
     pub await_on: Option<Await>,
+
+    /// What an agent stopping means when it left no check. Only meaningful with
+    /// `await = "agent_stopped"`. Unset, it means `error`: nothing says whether
+    /// the work happened. `pass` is for pipelines whose work is judged by a
+    /// later pipeline — an implement step does not grade itself. A check, when
+    /// there is one, always wins over this default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_stop: Option<Outcome>,
 }
 
 impl Pipeline {

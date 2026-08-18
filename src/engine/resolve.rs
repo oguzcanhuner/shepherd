@@ -268,9 +268,11 @@ pub fn resolve_awaiting(conn: &mut Connection, task_id: &str, cause: &str) -> Re
     }
 
     // The verdict is a `check_run` row, not anything the agent told us directly.
-    // No check means the step errored: an agent that stopped without leaving one
-    // may have run out of turns, crashed, or been interrupted, and none of those
-    // are a pass.
+    // No check falls back to the pipeline's `on_stop` — `pass` for pipelines
+    // whose work a later pipeline judges, so a working agent does not have to
+    // grade itself. Unset means error: an agent that stopped without leaving a
+    // verdict may have run out of turns, crashed, or been interrupted, and
+    // nothing says whether the work happened.
     let check = check::latest_for_step(conn, task_id, &at.pipeline, &at.step, at.round)?;
     let report = match &check {
         Some(c) => StepReport::verdict(
@@ -286,10 +288,21 @@ pub fn resolve_awaiting(conn: &mut Connection, task_id: &str, cause: &str) -> Re
                 short_sha(&c.sha)
             ),
         ),
-        None => StepReport::verdict(
-            Outcome::Error,
-            format!("{cause}, leaving no check for {at} — nothing says whether it worked"),
-        ),
+        None => match policy
+            .config
+            .pipeline
+            .get(&at.pipeline)
+            .and_then(|p| p.on_stop)
+        {
+            Some(outcome) => StepReport::verdict(
+                outcome,
+                format!("{cause}, leaving no check — the pipeline's on_stop says {outcome}"),
+            ),
+            None => StepReport::verdict(
+                Outcome::Error,
+                format!("{cause}, leaving no check for {at} — nothing says whether it worked"),
+            ),
+        },
     };
 
     tracing::info!(
