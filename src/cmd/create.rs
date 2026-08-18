@@ -1,6 +1,7 @@
 use crate::config::Policy;
 use crate::db::{self, task::NewTask};
 use crate::engine;
+use crate::supervisor;
 use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
 
@@ -36,5 +37,20 @@ pub fn run(
 
     // stdout is the id and nothing else, so `TASK=$(shep create ...)` works.
     println!("{}", task.id);
+
+    // A task queued into a store nothing is driving would sit there silently,
+    // which reads as "shepherd is broken". Say so on stderr — and inside a
+    // Herdr context, fix it.
+    if !supervisor::health(&conn)?.is_healthy() {
+        if supervisor::may_revive() && supervisor::revive(&conn, db_path)? {
+            eprintln!("note: the supervisor was down; started one — {} will run shortly", task.id);
+        } else {
+            eprintln!(
+                "warning: no supervisor is running, so {} will not start. \
+                 Restart Herdr, or run `shep supervise` yourself.",
+                task.id
+            );
+        }
+    }
     Ok(())
 }

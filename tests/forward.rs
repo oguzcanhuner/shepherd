@@ -18,6 +18,9 @@ const WORKSPACE_CLOSED: &str = r#"{"event":"workspace_closed","data":{"type":"wo
 fn forward(db: &Path, event_json: Option<&str>, stdin: Option<&str>) -> std::process::Output {
     let mut cmd = Command::new(SHEP);
     cmd.arg("--db").arg(db).arg("forward");
+    // The suite may itself run inside a Herdr pane; a test must never revive
+    // a real supervisor over a temp store.
+    cmd.env("SHEP_NO_REVIVE", "1").env_remove("HERDR_PANE_ID");
     match event_json {
         Some(json) => {
             cmd.env("HERDR_PLUGIN_EVENT_JSON", json);

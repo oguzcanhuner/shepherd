@@ -21,6 +21,10 @@ fn shep(db: &Path, args: &[&str]) -> Run {
         .arg("--db")
         .arg(db)
         .args(args)
+        // The suite may itself run inside a Herdr pane; a test must never
+        // revive a real supervisor over a temp store.
+        .env("SHEP_NO_REVIVE", "1")
+        .env_remove("HERDR_PANE_ID")
         .output()
         .expect("run shep");
     Run {

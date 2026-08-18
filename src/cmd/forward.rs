@@ -1,4 +1,5 @@
 use crate::db::{self, raw_event};
+use crate::supervisor;
 use anyhow::{Result, bail};
 use std::io::Read;
 use std::path::Path;
@@ -37,5 +38,18 @@ pub fn run(db_path: &Path) -> Result<()> {
     // a hook is not firing.
     let name = std::env::var(EVENT_NAME).unwrap_or_else(|_| "?".to_string());
     println!("forwarded {name} as raw_event {seq}");
+
+    // The self-healing path. Herdr's startup hook runs once per server start
+    // and never again, so a supervisor lost to a reinstall stays down — unless
+    // the hooks that keep firing anyway bring it back. This event is useless
+    // until something drains it, which is exactly the argument for the spawn.
+    // Best-effort: a failed revival must not fail the forward that worked.
+    if supervisor::may_revive() {
+        match supervisor::revive(&conn, db_path) {
+            Ok(true) => println!("supervisor was down; started one"),
+            Ok(false) => {}
+            Err(e) => println!("supervisor is down and could not be revived: {e}"),
+        }
+    }
     Ok(())
 }

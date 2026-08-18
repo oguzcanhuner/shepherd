@@ -329,6 +329,53 @@ fn install_signal_handlers() {
     }
 }
 
+/// Is this process in a position to revive a down supervisor?
+///
+/// Herdr's `[[startup]]` hook runs once per server start and is never re-run
+/// on reinstall or reload (its docs: startup hooks are one-shot commands, not
+/// supervised daemons). So a supervisor that stops between server starts stays
+/// down unless something else notices — and the things that notice are the
+/// hooks and commands that run anyway. Only a Herdr context qualifies: a hook
+/// (`HERDR_ENV`) or a managed pane (`HERDR_PANE_ID`). A bare shell — including
+/// every test — only advises, because spawning daemons from arbitrary contexts
+/// is how orphaned supervisors end up polling deleted stores.
+pub fn may_revive() -> bool {
+    if std::env::var_os("SHEP_NO_REVIVE").is_some() {
+        return false;
+    }
+    std::env::var_os("HERDR_ENV").is_some() || std::env::var_os("HERDR_PANE_ID").is_some()
+}
+
+/// Start a detached supervisor over this store if nothing healthy is driving it.
+/// Returns whether one was spawned.
+///
+/// Safe against races by construction: the spawned process runs [`ensure_sole`]
+/// itself, so two revivals — or a revival racing the startup hook — mean one
+/// supervisor and one immediate, quiet exit.
+pub fn revive(conn: &Connection, db_path: &Path) -> Result<bool> {
+    if health(conn)?.is_healthy() {
+        return Ok(false);
+    }
+    let exe = std::env::current_exe().map_err(Error::from)?;
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg("--db")
+        .arg(db_path)
+        .arg("supervise")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    // Its own process group: a revived supervisor must outlive the hook or
+    // command that noticed it was missing, and must not die with that
+    // process's terminal.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    cmd.spawn().map_err(Error::from)?;
+    Ok(true)
+}
+
 /// Refuse to start a second supervisor over the same store: two of them would
 /// both be advancing the same tasks.
 pub fn ensure_sole(conn: &Connection) -> Result<()> {
