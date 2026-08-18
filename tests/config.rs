@@ -700,19 +700,64 @@ pipelines = ["review"]
     );
     let text = std::fs::read_to_string(&path).expect("read");
 
-    // HOME is process-wide and the search path is read at each call, so both the
-    // validation and the resolution happen while this test owns it.
-    let previous = std::env::var_os("HOME");
-    unsafe { std::env::set_var("HOME", home.path()) };
-    let resolved = Policy::parse(&text, repo.root(), &path).map(|p| p.step_kind("lint"));
-    match previous {
-        Some(value) => unsafe { std::env::set_var("HOME", value) },
-        None => unsafe { std::env::remove_var("HOME") },
-    }
+    // The search path is a parameter, not ambient state. Reaching for the real
+    // HOME here would mean mutating it process-wide, and the other tests in this
+    // binary resolve script paths at the same time — two of them expect `lint`
+    // *not* to resolve, so they would fail whenever the swap overlapped them.
+    let policy = Policy::parse_in(
+        &text,
+        repo.root(),
+        &path,
+        vec![
+            repo.root().join(".shep/scripts"),
+            home.path().join(".config/shep/scripts"),
+        ],
+    )
+    .expect("a script in the fallback path resolves");
 
-    match resolved.expect("a script in the fallback path resolves") {
+    match policy.step_kind("lint") {
         Some(StepKind::Script(p)) => assert!(p.starts_with(home.path()), "got {p:?}"),
         other => panic!("expected the shared script, got {other:?}"),
+    }
+}
+
+#[test]
+fn the_repo_wins_over_the_shared_fallback() {
+    // Both exist: the repo's own script is the one that judges its code.
+    let home = tempfile::tempdir().expect("temp dir");
+    std::fs::create_dir_all(home.path().join(".config/shep/scripts")).expect("mkdir");
+    let shared = home.path().join(".config/shep/scripts/lint.sh");
+    std::fs::write(&shared, "#!/usr/bin/env bash\n").expect("write");
+    make_executable(&shared);
+
+    let repo = Repo::new();
+    repo.script("lint");
+    let path = repo.write(
+        r#"
+[pipeline.review]
+steps = ["lint"]
+
+[type.feature]
+description = "x"
+pipelines = ["review"]
+"#,
+    );
+    let text = std::fs::read_to_string(&path).expect("read");
+
+    let policy = Policy::parse_in(
+        &text,
+        repo.root(),
+        &path,
+        vec![
+            repo.root().join(".shep/scripts"),
+            home.path().join(".config/shep/scripts"),
+        ],
+    )
+    .expect("valid");
+
+    match policy.step_kind("lint") {
+        Some(StepKind::Script(p)) => assert!(p.starts_with(repo.root()), "got {p:?}"),
+        other => panic!("expected the repo's script, got {other:?}"),
     }
 }
 

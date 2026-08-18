@@ -54,7 +54,8 @@ impl StepSpec {
         let script = policy.script_path(step).ok_or_else(|| {
             crate::Error::other(format!(
                 "step {step:?} has no script — looked in {}",
-                crate::config::script_search_path(&policy.repo)
+                policy
+                    .script_dirs
                     .iter()
                     .map(|d| d.display().to_string())
                     .collect::<Vec<_>>()

@@ -261,7 +261,13 @@ fn start_one(
 fn run_and_report(db_path: PathBuf, policy: Policy, spec: Box<engine::StepSpec>, task_id: String) {
     let report = engine::run_step(&spec);
     if !report.logs.trim().is_empty() {
-        tracing::debug!(task = %task_id, step = %spec.step, "step output:\n{}", report.logs);
+        // A step that did not pass is one you will want to read the output of, and
+        // the note alone is rarely enough to say why. A pass is noise.
+        if report.outcome == crate::Outcome::Pass {
+            tracing::debug!(task = %task_id, step = %spec.step, "step output:\n{}", report.logs);
+        } else {
+            tracing::info!(task = %task_id, step = %spec.step, "step output:\n{}", report.logs);
+        }
     }
     tracing::info!(
         task = %task_id,

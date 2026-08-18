@@ -26,6 +26,11 @@ pub struct Policy {
     pub repo: PathBuf,
     /// The config file itself, for error messages.
     pub path: PathBuf,
+    /// Where step scripts are looked for, in order, resolved once when the policy
+    /// is built. Held rather than recomputed so that a `Policy` answers the same
+    /// question the same way for its whole life, whatever the environment does
+    /// afterwards.
+    pub script_dirs: Vec<PathBuf>,
 }
 
 impl Policy {
@@ -38,7 +43,19 @@ impl Policy {
     /// Parse and validate config text. Separated from the read so tests and
     /// `shep validate` share exactly one path through the rules.
     pub fn parse(text: &str, repo: &Path, path: &Path) -> Result<Policy> {
-        let policy = Policy::parse_only(text, repo, path)?;
+        Policy::parse_in(text, repo, path, script_search_path(repo))
+    }
+
+    /// Parse and validate, looking for step scripts in the given directories.
+    /// The search path is a parameter so that testing the fallback location does
+    /// not mean reaching for a process-wide `HOME`.
+    pub fn parse_in(
+        text: &str,
+        repo: &Path,
+        path: &Path,
+        script_dirs: Vec<PathBuf>,
+    ) -> Result<Policy> {
+        let policy = Policy::parse_only_in(text, repo, path, script_dirs)?;
         let problems = policy.problems();
         if !problems.is_empty() {
             return Err(Error::other(validate::report(&policy, &problems)));
@@ -49,7 +66,15 @@ impl Policy {
     /// Parse without validating, for `shep validate` — which wants to report
     /// every problem rather than fail at the first.
     pub fn parse_only(text: &str, repo: &Path, path: &Path) -> Result<Policy> {
-        // toml's own error already carries the line and column.
+        Policy::parse_only_in(text, repo, path, script_search_path(repo))
+    }
+
+    fn parse_only_in(
+        text: &str,
+        repo: &Path,
+        path: &Path,
+        script_dirs: Vec<PathBuf>,
+    ) -> Result<Policy> {
         let config: Config = toml::from_str(text)
             // toml's message carries the line, the column and a source excerpt.
             // Truncating it would throw away the sentence naming the bad key.
@@ -58,6 +83,7 @@ impl Policy {
             config,
             repo: repo.to_path_buf(),
             path: path.to_path_buf(),
+            script_dirs,
         })
     }
 
@@ -134,8 +160,8 @@ impl Policy {
     /// `.shep/scripts/lint.sh`, with `~/.config/shep/scripts/` as the fallback
     /// for project-agnostic scripts (PLAN §4).
     pub fn script_path(&self, step: &str) -> Option<PathBuf> {
-        script_search_path(&self.repo)
-            .into_iter()
+        self.script_dirs
+            .iter()
             .map(|dir| dir.join(format!("{step}.sh")))
             .find(|p| is_executable_file(p))
     }

@@ -330,7 +330,8 @@ fn unresolved(policy: &Policy, at: &str, name: &str, role: &str) -> Vec<Problem>
     if policy.step_kind(name).is_some() {
         return Vec::new();
     }
-    let searched = super::script_search_path(&policy.repo)
+    let searched = policy
+        .script_dirs
         .iter()
         .map(|d| format!("{}/{name}.sh", d.display()))
         .collect::<Vec<_>>()
