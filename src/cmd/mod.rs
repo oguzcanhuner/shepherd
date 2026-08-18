@@ -12,6 +12,7 @@ pub mod pause;
 pub mod ps;
 pub mod raw;
 pub mod retry;
+pub mod settle;
 pub mod status;
 pub mod supervise;
 pub mod trace;

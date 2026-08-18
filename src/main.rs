@@ -124,6 +124,37 @@ enum Command {
         id: String,
     },
 
+    /// Approve a task that is waiting for you, and let it carry on.
+    Approve {
+        #[arg(long, value_name = "TASK")]
+        task: Option<String>,
+        /// Who is approving. Defaults to $USER.
+        #[arg(long, value_name = "NAME")]
+        author: Option<String>,
+        /// Why, for the record. Also read from stdin when piped.
+        #[arg(long, value_name = "TEXT")]
+        note: Option<String>,
+    },
+
+    /// Reject a task that is waiting for you, and send it wherever its pipeline
+    /// sends a rejection.
+    Reject {
+        #[arg(long, value_name = "TASK")]
+        task: Option<String>,
+        #[arg(long, value_name = "NAME")]
+        author: Option<String>,
+        #[arg(long, value_name = "TEXT")]
+        note: Option<String>,
+    },
+
+    /// Send a task back through one of its type's pipelines, by hand.
+    Run {
+        #[arg(value_name = "PIPELINE")]
+        pipeline: String,
+        #[arg(long, value_name = "TASK")]
+        task: Option<String>,
+    },
+
     /// Re-queue a parked task, retrying the step it stopped on.
     Retry {
         #[arg(value_name = "TASK")]
@@ -233,6 +264,21 @@ fn main() -> Result<()> {
                     } => cmd::check::submit(&db, pass, fail, author, task),
                 },
                 Command::Read { id } => cmd::check::read(&db, &id),
+                Command::Approve { task, author, note } => cmd::settle::run(
+                    &db,
+                    shepherd::db::check::Conclusion::Pass,
+                    task,
+                    author,
+                    note,
+                ),
+                Command::Reject { task, author, note } => cmd::settle::run(
+                    &db,
+                    shepherd::db::check::Conclusion::Fail,
+                    task,
+                    author,
+                    note,
+                ),
+                Command::Run { pipeline, task } => cmd::settle::run_pipeline(&db, &pipeline, task),
                 Command::Retry { task } => cmd::retry::run(&db, &task),
                 Command::Cancel { task, reason } => cmd::cancel::run(&db, &task, reason),
                 Command::Forward => cmd::forward::run(&db),

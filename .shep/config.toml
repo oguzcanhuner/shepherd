@@ -22,10 +22,17 @@ on_exhausted = "reject"
 steps = ["code"]
 await = "agent_stopped"
 
+# Hand it over. `show_diff` splits a pane, focuses it and notifies; then nothing
+# happens at all until you say so — not even the agent going busy in its own pane
+# (PLAN §7.2).
+[pipeline.handoff]
+steps = ["show_diff"]
+await = "human"
+
 [type.check]
 description = "Lint, test and review this repo. No worktree, no handoff."
 pipelines = ["review"]
 
 [type.feature]
-description = "Hand it to an agent in its own worktree, then lint, test and review what it did."
-pipelines = ["implement", "review"]
+description = "Hand it to an agent in its own worktree, review what it did, then show it to you."
+pipelines = ["implement", "review", "handoff"]

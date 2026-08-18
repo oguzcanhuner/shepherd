@@ -188,17 +188,24 @@ pub fn finish_step(
                     .get(&at.pipeline)
                     .and_then(|p| p.await_on);
                 match awaits {
-                    Some(await_on) => Decision::apply(TaskPatch::new()).with_event(
-                        NewEvent::for_task(names::TASK_STEP_AWAITING, task_id).payload(
-                            serde_json::json!({
-                                "pipeline": at.pipeline,
-                                "step": at.step,
-                                "round": at.round,
-                                "await": await_on.as_str(),
-                                "pane": report.pane,
-                            }),
-                        ),
-                    ),
+                    // `human_owned` is the muting: status events for its pane are
+                    // still written to `raw_event`, but advance nothing, so you can
+                    // talk to the agent without the state machine moving under you
+                    // (PLAN §7.2).
+                    Some(await_on) => {
+                        Decision::apply(TaskPatch::new().human_owned(await_on == Await::Human))
+                            .with_event(
+                                NewEvent::for_task(names::TASK_STEP_AWAITING, task_id).payload(
+                                    serde_json::json!({
+                                        "pipeline": at.pipeline,
+                                        "step": at.step,
+                                        "round": at.round,
+                                        "await": await_on.as_str(),
+                                        "pane": report.pane,
+                                    }),
+                                ),
+                            )
+                    }
                     None => park(format!(
                         "step {} returned \"started\", but pipeline {} has no await, so nothing \
                          would ever resolve it",
@@ -206,6 +213,13 @@ pub fn finish_step(
                     )),
                 }
             }
+        };
+
+        // Any answer to a step ends the muting, whatever the answer was: the task
+        // is the machine's again the moment it is not waiting for you.
+        let decision = match report.outcome {
+            Outcome::Started => decision,
+            _ => with_patch(decision, |patch| patch.human_owned(false)),
         };
 
         // The step_finished event comes first: it is the record of what happened,
@@ -279,6 +293,17 @@ fn park(reason: impl Into<String>) -> Decision {
     )
 }
 
+/// Add to a decision's patch, leaving a bail alone.
+fn with_patch(decision: Decision, add: impl FnOnce(TaskPatch) -> TaskPatch) -> Decision {
+    match decision {
+        Decision::Apply { patch, events } => Decision::Apply {
+            patch: add(patch),
+            events,
+        },
+        bail => bail,
+    }
+}
+
 fn prepend_event(decision: Decision, first: NewEvent) -> Decision {
     match decision {
         Decision::Apply { patch, events } => {
@@ -320,6 +345,116 @@ pub fn retry(conn: &mut Connection, task_id: &str) -> Result<TransitionOutcome> 
                 })),
             ),
         )
+    })
+}
+
+/// `shep approve` / `shep reject` — the only things that resolve a handoff.
+///
+/// The verdict is written as a check first, because a person approving a change is
+/// a verdict about a commit like any other (PLAN §2) — and it is what `integrate`
+/// will insist on. Then the step is finished with it, which is the same path a
+/// script's verdict takes.
+pub fn settle_by_human(
+    conn: &mut Connection,
+    policy: &Policy,
+    task_id: &str,
+    conclusion: Conclusion,
+    author: &str,
+    note: Option<String>,
+) -> Result<(Check, TransitionOutcome)> {
+    let task = task::require(conn, task_id)?;
+    // One answer for every way a task can fail to be yours: nowhere yet, somewhere
+    // else, or at a step whose pipeline never asks anyone.
+    let at = StepAt::of(&task)
+        .filter(|at| task.status == Status::Running && awaits_human(policy, &at.pipeline));
+    let Some(at) = at else {
+        return Err(Error::other(format!(
+            "task {task_id} is not waiting for you: it is {} at {}",
+            task.status,
+            StepAt::of(&task)
+                .map(|at| at.to_string())
+                .unwrap_or_else(|| "no step".to_string())
+        )));
+    };
+
+    let check = submit_check(
+        conn,
+        task_id,
+        &Submission {
+            conclusion,
+            author: Some(author.to_string()),
+            body: note.clone(),
+            at: Some(at.clone()),
+        },
+    )?;
+
+    let outcome = match conclusion {
+        Conclusion::Pass => Outcome::Pass,
+        Conclusion::Fail => Outcome::Reject,
+    };
+    let report = StepReport::verdict(
+        outcome,
+        match &note {
+            Some(note) => format!("{author} said {}: {note}", conclusion.as_str()),
+            None => format!("{author} said {}", conclusion.as_str()),
+        },
+    );
+    let moved = finish_step(conn, policy, task_id, &at, &report)?;
+    Ok((check, moved))
+}
+
+/// `shep run <pipeline>` — put a task at the top of a pipeline, out of band.
+///
+/// For the handoff you are in the middle of: read the diff, decide the review
+/// should run again, and send it back yourself. Where it goes afterwards is
+/// ordinary — the pipeline passes and the type carries on from there, which for
+/// `review` means straight back to the handoff you were standing in.
+pub fn run_pipeline(
+    conn: &mut Connection,
+    policy: &Policy,
+    task_id: &str,
+    pipeline: &str,
+) -> Result<TransitionOutcome> {
+    let task = task::require(conn, task_id)?;
+    let kind = policy.task_type(&task.kind)?;
+    if !kind.pipelines.iter().any(|p| p == pipeline) {
+        return Err(Error::other(format!(
+            "type {:?} has no pipeline {pipeline:?} — it runs {}",
+            task.kind,
+            kind.pipelines.join(" → ")
+        )));
+    }
+    let first = policy
+        .pipeline(pipeline)?
+        .steps
+        .first()
+        .ok_or_else(|| Error::other(format!("pipeline {pipeline:?} has no steps")))?
+        .clone();
+
+    transition(conn, task_id, |task| {
+        if task.status.is_terminal() {
+            return Ok(Decision::bail(format!(
+                "already {} — create a new task instead",
+                task.status
+            )));
+        }
+        Ok(Decision::apply(
+            TaskPatch::new()
+                .status(Status::Queued)
+                .pipeline(Some(pipeline))
+                .step(Some(first.clone()))
+                .round(0)
+                // Asking for a pipeline by hand is handing the task back.
+                .human_owned(false),
+        )
+        .with_event(
+            NewEvent::new(names::TASK_RESUMED).payload(serde_json::json!({
+                "reason": "run by hand",
+                "pipeline": pipeline,
+                "step": first,
+                "was": {"pipeline": task.pipeline, "step": task.step, "round": task.round},
+            })),
+        ))
     })
 }
 

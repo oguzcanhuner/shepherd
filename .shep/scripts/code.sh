@@ -27,8 +27,22 @@ agent_kind=${SHEP_AGENT_KIND:-claude}
 # you would rather: SHEP_AGENT_FLAGS='--permission-mode acceptEdits'.
 agent_flags=${SHEP_AGENT_FLAGS:---dangerously-skip-permissions}
 
+# Herdr agent names must be unique among live agents (herdr-findings §5.3), and
+# this one names the task — so a retry whose predecessor's agent is still alive
+# collides with itself (`agent_name_taken`). Adopting that agent is better than
+# working around it: it is this task's agent, in this task's worktree.
+agent_name="shep-${SHEP_TASK_ID//_/-}"
+
 worktree=${SHEP_WORKTREE:-}
-if [ -n "${SHEP_PANE:-}" ] && herdr pane get "$SHEP_PANE" >/dev/null 2>&1; then
+adopted=$(agent_field "$agent_name" pane_id)
+if [ -n "$adopted" ]; then
+  # A live agent named for this task is the authority on where this task's agent
+  # is — more so than the pane the store last recorded, which may be a pane a
+  # failed attempt split and never started anything in.
+  pane=$adopted
+  echo "adopting $agent_name, already running in $pane"
+  "$shep" bind-pane "$pane" || die "could not bind pane $pane"
+elif [ -n "${SHEP_PANE:-}" ] && herdr pane get "$SHEP_PANE" >/dev/null 2>&1; then
   pane=$SHEP_PANE
   echo "reusing pane $pane"
 else
@@ -70,9 +84,20 @@ if herdr agent get "$pane" >/dev/null 2>&1; then
   echo "an agent is already in $pane"
 else
   wait_for_shell "$pane" || die "pane $pane never came back to a shell prompt"
-  started=$(herdr agent start "shep-${SHEP_TASK_ID//_/-}" --kind "$agent_kind" \
-              --pane "$pane" -- $agent_flags 2>&1) \
-    || die "herdr agent start failed in $pane: $(oneline "$started")"
+  # `agent_pane_busy` after wait_for_shell has passed: Herdr's own notion of an
+  # available shell settles a little after the foreground process list does, and
+  # there is no field that reports it. So ask again, a few times, rather than
+  # inventing a fixed sleep that is either too short or always too long.
+  attempt=1
+  until started=$(herdr agent start "$agent_name" --kind "$agent_kind" \
+                    --pane "$pane" -- $agent_flags 2>&1); do
+    if [ "$attempt" -ge 15 ] || ! printf '%s' "$started" | grep -q agent_pane_busy; then
+      die "herdr agent start failed in $pane: $(oneline "$started")"
+    fi
+    attempt=$((attempt + 1))
+    sleep 1
+  done
+  [ "$attempt" -gt 1 ] && echo "started the agent on attempt $attempt"
 fi
 
 # The script owns the prompt, not the engine: this wording is the whole

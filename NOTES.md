@@ -144,6 +144,46 @@ Step scripts are policy in a repo, so they run under whatever `bash` that machin
 has. Every prompt default is therefore built before its heredoc, and the rule is
 written at the top of `.shep/scripts/lib.sh` where the next person will meet it.
 
+## An agent name is a task's name, so a retry collides with itself (2026-08-18)
+
+`herdr agent start` refuses a name that is already in use by a live agent
+(herdr-findings §5.3):
+
+```json
+{"error":{"code":"agent_name_taken",
+          "message":"agent name shep-t-1 is already used; candidates: pane_id=w12:p2 ..."}}
+```
+
+Since `code.sh` names the agent after the task, that fires on exactly the retry
+you would most want to work: the first attempt started an agent and then died
+somewhere after, so the name is taken by an agent that *is* this task's.
+
+Working around the name would be the wrong fix. `code.sh` adopts instead — it asks
+`herdr agent get shep-<task>` for a pane and takes it, binding that pane to the
+task. And adoption comes *before* the pane the store remembers, because a failed
+attempt can leave a bound pane it never started anything in: a live agent named
+for the task is the better authority on where that task's agent is.
+
+## The hook writes to the default store, so `--db` is a trap (2026-08-18)
+
+`hooks/forward.sh` runs `shep forward` with whatever environment the Herdr server
+has, which does not include `$SHEP_DB`. So every Herdr event lands in the default
+store (`~/.local/state/shep/shep.db`) regardless of which store the supervisor you
+started is driving.
+
+Run a supervisor with `--db /somewhere/else` and every deferred step hangs: the
+work happens, the agent stops, and the edge is filed in a store nobody is reading.
+Cost half an hour of a live M7 run before it was obvious.
+
+Two things follow. Tests use `--db` and are unaffected, because they write
+`raw_event` rows themselves. But anything live must use the default store — and
+`shep status` ought to say when the store it is reporting on is not the one the
+hooks write to (M9's business).
+
+The other half of the same trap: a pane's environment is fixed when it is split, so
+`$SHEP_DB` in an agent's pane points at whatever store existed then. Move the store
+and that agent's `shep check submit` writes nowhere useful.
+
 ## Hook stdout is visible and worth using
 
 `herdr plugin log list --plugin shepherd` shows each hook run with its exit code,
