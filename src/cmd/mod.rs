@@ -13,13 +13,14 @@ pub mod ps;
 pub mod raw;
 pub mod retry;
 pub mod settle;
+pub mod skill;
 pub mod status;
 pub mod supervise;
 pub mod trace;
 pub mod types;
 pub mod validate;
 
-/// The environment a step script is given (PLAN §7.1).
+/// The environment a step script is given.
 pub const TASK_ENV: &str = "SHEP_TASK_ID";
 /// What Herdr injects into every managed pane (herdr-findings §2).
 pub const PANE_ENV: &str = "HERDR_PANE_ID";
@@ -28,7 +29,7 @@ pub const PANE_ENV: &str = "HERDR_PANE_ID";
 ///
 /// `--task` wins, then `$SHEP_TASK_ID`, which every step script has. Last comes
 /// `$HERDR_PANE_ID` through `pane_task`, which is all an agent in a pane has —
-/// and the reason a bare `shep context` works at all (PLAN §6).
+/// and the reason a bare `shep context` works at all.
 pub fn task_id(conn: &rusqlite::Connection, given: Option<String>) -> anyhow::Result<String> {
     if let Some(id) = given {
         return Ok(id);
@@ -54,7 +55,7 @@ pub fn task_id(conn: &rusqlite::Connection, given: Option<String>) -> anyhow::Re
 
 /// Which repo's policy governs this invocation.
 ///
-/// Config is loaded per repo root, not globally (PLAN §4), so every command that
+/// Config is loaded per repo root, not globally, so every command that
 /// touches policy has to answer this the same way.
 pub fn repo_root(given: Option<std::path::PathBuf>) -> anyhow::Result<std::path::PathBuf> {
     if let Some(path) = given {

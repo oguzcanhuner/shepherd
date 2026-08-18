@@ -1,6 +1,6 @@
 //! `shep` — one binary. `shep supervise` is the daemon; every other subcommand
 //! is a client that writes a transaction and lets the supervisor notice on its
-//! next poll. There is no socket and no server (PLAN §7.4).
+//! next poll. There is no socket and no server.
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -170,6 +170,15 @@ enum Command {
         reason: Option<String>,
     },
 
+    /// Print the orchestrator skill: everything a conversational agent needs
+    /// to know to create, watch and settle tasks. Markdown on stdout, with
+    /// this repo's task types read live from its config.
+    Skill {
+        /// The repo whose policy to read. Defaults to the current repo root.
+        #[arg(long, value_name = "PATH")]
+        repo: Option<PathBuf>,
+    },
+
     /// List the types a task can be created as, with their descriptions.
     Types {
         /// The repo whose policy to read. Defaults to the current repo root.
@@ -241,6 +250,7 @@ fn main() -> Result<()> {
                 Command::Status { json } => cmd::status::run(&db, json),
                 Command::Ps { all, json } => cmd::ps::run(&db, all, json),
                 Command::Types { repo, json } => cmd::types::run(&cmd::repo_root(repo)?, json),
+                Command::Skill { repo } => cmd::skill::run(&cmd::repo_root(repo)?),
                 Command::Validate { repo, json } => {
                     cmd::validate::run(&cmd::repo_root(repo)?, json)
                 }
