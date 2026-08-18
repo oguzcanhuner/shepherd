@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Shepherd — architecture plan</title>
+<style>
+  :root {
+    --paper: #fafaf8;
+    --ink: #1a1a1a;
+    --ink-light: #767676;
+    --red: #1a1a1a;
+    --mono: "SF Mono", "Roboto Mono", "Consolas", "Menlo", monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    background-image:
+      repeating-linear-gradient(0deg, transparent, transparent 23px, rgba(26,26,26,.045) 24px),
+      repeating-linear-gradient(90deg, transparent, transparent 23px, rgba(26,26,26,.045) 24px);
+    color: var(--ink);
+    font-family: "Helvetica Neue", "Inter", "Segoe UI", Arial, sans-serif;
+  }
+  header { text-align: center; padding: 26px 16px 0; }
+  header h1 {
+    margin: 0; font-size: 24px; letter-spacing: 4px; font-weight: 600;
+    font-family: var(--mono);
+    border-bottom: 2px solid var(--ink); display: inline-block; padding-bottom: 8px;
+  }
+  header p { margin: 14px auto 0; max-width: 760px; color: var(--ink-light); font-size: 14.5px; line-height: 1.55; }
+  header .hint { color: var(--red); font-size: 12.5px; margin-top: 8px; font-family: var(--mono); }
+  code { font-family: var(--mono); font-size: .88em; background: rgba(43,48,56,.07); padding: 0 4px; border-radius: 2px; }
+
+  #citywrap { max-width: 1250px; margin: 0 auto; padding: 0 10px; }
+  svg { width: 100%; height: auto; display: block; }
+
+  .bld { cursor: pointer; transition: transform .18s ease; }
+  .bld:hover { transform: translateY(-4px); }
+  .bld:hover .face { stroke-width: 1.7; }
+  .bld.selected .face, .bld.selected .stroke { stroke-width: 2.1; }
+  .stroke { stroke: var(--ink); stroke-width: 1; fill: none; stroke-linejoin: round; stroke-linecap: round; }
+  .face { stroke: var(--ink); stroke-width: 1; stroke-linejoin: round; transition: stroke-width .15s; }
+  .lbl {
+    font-size: 12.5px; fill: var(--ink); font-weight: 600; letter-spacing: .5px;
+    font-family: var(--mono); pointer-events: none;
+  }
+  .sub { font-size: 10px; fill: var(--ink-light); font-family: "Helvetica Neue", Arial, sans-serif; pointer-events: none; }
+  .leader { stroke: var(--ink-light); stroke-width: .8; fill: none; }
+  .flow { fill: none; stroke: var(--ink); stroke-width: 1.1; opacity: .45; transition: opacity .15s; }
+  .flowlabel { font-size: 10.5px; font-family: var(--mono); font-weight: 600; }
+  .note { font-size: 10.5px; fill: var(--ink-light); font-family: var(--mono); letter-spacing: 1.5px; }
+  .compass { opacity: .75; }
+
+  #panel { max-width: 1250px; margin: -6px auto 50px; padding: 0 14px; }
+  #card {
+    background: rgba(255,255,255,.7);
+    border: 1px solid var(--ink);
+    box-shadow: 4px 4px 0 rgba(43,48,56,.12);
+    padding: 16px 24px; min-height: 120px;
+  }
+  #card h2 { margin: 0; font-size: 18px; color: var(--ink); font-family: var(--mono); letter-spacing: .5px; }
+  #card .role { color: var(--blue); font-size: 11px; letter-spacing: 2px; text-transform: uppercase; margin-top: 3px; font-family: var(--mono); }
+  #card p, #card ul { font-size: 14px; line-height: 1.6; }
+  #card ul { padding-left: 22px; }
+  .legend { display:flex; gap: 26px; flex-wrap: wrap; justify-content:center; margin: 4px 0 2px; font-size: 12px; color: var(--ink); font-family: var(--mono); }
+  .legend b { font-weight: 700; }
+  .lg::before { font-weight: 400; margin-right: 6px; letter-spacing: -1px; }
+  .lg-cmd::before { content: "────"; } .lg-evt::before { content: "─ ─ ─"; }
+  .lg-poll::before { content: "·······"; } .lg-out::before { content: "─·─·"; }
+  .flowbtn {
+    margin: 10px 6px 0 0; background: transparent; color: var(--ink);
+    border: 1px solid var(--ink); border-radius: 0;
+    padding: 5px 14px; cursor: pointer; font-size: 12px; font-family: var(--mono); font-weight: 600;
+  }
+  .flowbtn:hover { color: var(--red); border-color: var(--red); }
+  .flowbtn.on { background: rgba(192,57,43,.1); color: var(--red); border-color: var(--red); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>SHEPHERD &middot; SITE PLAN &middot; FIG. 1</h1>
+  <p><strong>shepherd</strong> coordinates coding agents. It is a Herdr plugin built around one Rust program, <code>shep</code>: tasks move through configurable pipelines of steps, each step is a script in any language, and every part of the system communicates through a single shared SQLite database file.</p>
+  <div class="hint">click any structure for its specification &middot; buttons below the plan trace the flow of a task</div>
+</header>
+
+<div class="legend">
+  <span class="lg lg-cmd"><b>CLI commands</b> (transactions)</span>
+  <span class="lg lg-evt"><b>Herdr events</b></span>
+  <span class="lg lg-poll"><b>supervisor</b> polling / spawning</span>
+  <span class="lg lg-out"><b>outcomes & checks</b></span>
+</div>
+
+<div id="citywrap">
+<svg id="plan" viewBox="0 0 1250 760">
+  <defs>
+    <!-- technical hatching patterns -->
+    <pattern id="hatch" width="5" height="5" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+      <line x1="0" y1="0" x2="0" y2="5" stroke="#1a1a1a" stroke-width="0.6" opacity=".55"/>
+    </pattern>
+    <pattern id="hatch2" width="4" height="4" patternTransform="rotate(-45)" patternUnits="userSpaceOnUse">
+      <line x1="0" y1="0" x2="0" y2="4" stroke="#1a1a1a" stroke-width="0.5" opacity=".25"/>
+    </pattern>
+    <marker id="arrR" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M1 1 L 9 5 L 1 9" fill="none" stroke="context-stroke" stroke-width="1.4"/>
+    </marker>
+  </defs>
+
+  <g id="scene"></g>
+  <g id="flows"></g>
+  <g id="labels"></g>
+  <g id="packets"></g>
+
+  <!-- north arrow -->
+  <g class="compass" transform="translate(1175,64)">
+    <circle r="24" class="stroke"/>
+    <circle r="19" class="stroke" stroke-width=".6"/>
+    <path d="M0,-19 L4,0 L0,19 L-4,0 Z" fill="#1a1a1a" fill-opacity=".75" stroke="#1a1a1a" stroke-width=".8"/>
+    <text x="0" y="-31" text-anchor="middle" style="font-size:12px;font-weight:600;font-family:var(--mono)" fill="#1a1a1a">N</text>
+  </g>
+  <!-- title block, like a real drawing -->
+  <g>
+    <rect x="985" y="620" width="245" height="85" class="stroke" fill="rgba(255,255,255,.6)"/>
+    <line x1="985" y1="648" x2="1230" y2="648" class="stroke" stroke-width=".7"/>
+    <line x1="985" y1="676" x2="1230" y2="676" class="stroke" stroke-width=".7"/>
+  </g>
+  <text class="note" x="995" y="640" style="letter-spacing:.5px">PROJECT: SHEPHERD (HERDR PLUGIN)</text>
+  <text class="note" x="995" y="668" style="letter-spacing:.5px">SCALE: NTS · PROJECTION: ISO 30°</text>
+  <text class="note" x="995" y="696" style="letter-spacing:.5px">DWG NO. SHEP-001 · REV B</text>
+</svg>
+</div>
+
+<div id="panel">
+  <div id="card">
+    <h2>SHEPHERD — site overview</h2>
+    <div class="role">general notes</div>
+    <p>Each structure is one component; larger buildings are the more central ones. Every part of the system communicates the same way: <strong>by reading and writing one shared SQLite database file</strong> — the tall building in the middle. A command saves its change to the file; the supervisor checks the file a few times a second and acts on what it finds.</p>
+    <div id="flowbtns">
+      <button class="flowbtn" data-flow="create">① task created</button>
+      <button class="flowbtn" data-flow="spawn">② supervisor runs a step</button>
+      <button class="flowbtn" data-flow="agent">③ agent works & stops</button>
+      <button class="flowbtn" data-flow="verdict">④ checks & advancement</button>
+      <button class="flowbtn" data-flow="all">▶ full loop</button>
+      <button class="flowbtn" data-flow="stop">⏹ stop</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---------- isometric helpers ----------
+const ORX = 620, ORY = 375, S = 1;           // scene origin
+const CA = Math.cos(Math.PI/6), SA = Math.sin(Math.PI/6);
+function iso(x, y, z=0) {                    // grid units -> screen
+  return [ORX + (x - y) * CA * S, ORY + (x + y) * SA * S - z];
+}
+function poly(pts, cls, fill, extra={}) {
+  const p = document.createElementNS("http://www.w3.org/2000/svg","polygon");
+  p.setAttribute("points", pts.map(q=>q.join(",")).join(" "));
+  p.setAttribute("class", cls);
+  if (fill) p.setAttribute("fill", fill);
+  for (const k in extra) p.setAttribute(k, extra[k]);
+  return p;
+}
+function pathEl(d, cls, extra={}) {
+  const p = document.createElementNS("http://www.w3.org/2000/svg","path");
+  p.setAttribute("d", d); p.setAttribute("class", cls);
+  for (const k in extra) p.setAttribute(k, extra[k]);
+  return p;
+}
+function txt(x, y, s, cls, anchor="middle") {
+  const t = document.createElementNS("http://www.w3.org/2000/svg","text");
+  t.setAttribute("x",x); t.setAttribute("y",y); t.setAttribute("class",cls);
+  t.setAttribute("text-anchor",anchor); t.textContent = s;
+  return t;
+}
+
+const scene = document.getElementById("scene");
+const labels = document.getElementById("labels");
+
+// ---------- ground plane ----------
+(function ground(){
+  const g = [iso(-400,-300), iso(480,-300), iso(480,360), iso(-400,360)];
+  scene.appendChild(poly(g, "stroke", "rgba(255,255,255,.5)"));
+  // drafting grid on the ground
+  for (let i=-300; i<=360; i+=66) {
+    const a = iso(-400,i), b = iso(480,i);
+    scene.appendChild(pathEl(`M${a} L${b}`, "", {stroke:"#1a1a1a", "stroke-width":.35, opacity:.16, fill:"none"}));
+  }
+  for (let i=-400; i<=480; i+=68) {
+    const a = iso(i,-300), b = iso(i,360);
+    scene.appendChild(pathEl(`M${a} L${b}`, "", {stroke:"#1a1a1a", "stroke-width":.35, opacity:.16, fill:"none"}));
+  }
+})();
+
+// ---------- building constructors ----------
+const anchors = {};   // id -> screen anchor point for flows
+
+// One uniform form for every structure: a plain rectangular prism.
+// Footprint and height encode importance/size of the component.
+function prism(id, gx, gy, w, d, h) {
+  const g = document.createElementNS("http://www.w3.org/2000/svg","g");
+  g.setAttribute("class","bld"); g.setAttribute("data-id",id);
+  const A=iso(gx,gy,0),   B=iso(gx+w,gy,0),   C=iso(gx+w,gy+d,0),   D=iso(gx,gy+d,0);
+  const A2=iso(gx,gy,h),  B2=iso(gx+w,gy,h),  C2=iso(gx+w,gy+d,h),  D2=iso(gx,gy+d,h);
+  // footprint outline on the ground (dashed, like a plan)
+  scene.appendChild(poly([A,B,C,D], "", {fill:"none", stroke:"#1a1a1a", "stroke-width":.5, "stroke-dasharray":"3 3", opacity:.4}));
+  g.appendChild(poly([D,C,C2,D2], "face", "url(#hatch)"));   // left face: dense hatch
+  g.appendChild(poly([C,B,B2,C2], "face", "url(#hatch2)"));  // right face: light hatch
+  g.appendChild(poly([A2,B2,C2,D2], "face", "#fafaf8"));     // top: paper white
+  g.appendChild(pathEl(`M${D} L${D2} M${C} L${C2} M${B} L${B2}`, "stroke"));
+  anchors[id] = iso(gx+w/2, gy+d/2, h);
+  scene.appendChild(g);
+}
+
+// ---------- place structures on the plan ----------
+// spread out; size ∝ importance.  (gx, gy, w, d, h)
+// drawn back-to-front for correct overlap
+prism("herdr",      -370, -210, 145, 125,  96);
+prism("hook",       -160, -140,  48,  48,  18);
+prism("you",        -380,  200,  65,  65,  28);
+prism("cli",        -260,   60,  95,  95,  62);
+prism("worktree",    110, -250,  80,  70,  30);
+prism("db",           30,  -75, 130, 130, 120);  // the centrepiece
+prism("panes",       300, -230, 125, 105,  78);
+prism("supervisor", -110,  170, 150, 105,  82);
+prism("engine",      150,  220,  95,  95,  56);
+prism("scripts",     320,   30, 155,  75,  40);
+prism("config",      360,  200,  75,  75,  30);
+
+// ---------- labels with leader lines ----------
+const LBL = [
+  ["you",        "YOU + AGENT",        "requests start here",            -55, 55],
+  ["cli",        "SHEP (CLI)",         "front office · src/cmd/",       -110, 30],
+  ["herdr",      "HERDR",              "terminal host · panes & agents", -55, -60],
+  ["hook",       "FORWARD.SH",         "2-line event chute",             -20, -70],
+  ["db",         "SQLITE",             "the only IPC on site",            30, -105],
+  ["supervisor", "SHEP SUPERVISE",     "the works · poll → spawn → wait",-130, 75],
+  ["engine",     "ENGINE/",            "state machine",                    70, 65],
+  ["config",     "CONFIG.TOML",        "blueprints (per repo)",           95, 35],
+  ["scripts",    ".SHEP/SCRIPTS/",     "workshops: lint · test · fix…",  115, -20],
+  ["panes",      "AGENT PANES",        "worker housing (Claude Code)",     85, -60],
+  ["worktree",   "GIT WORKTREES",      "one yard per task",               -35, -75],
+];
+for (const [id, name, sub, dx, dy] of LBL) {
+  const a = anchors[id];
+  const lx = a[0]+dx, ly = a[1]+dy;
+  labels.appendChild(pathEl(`M${a[0]} ${a[1]} L${lx} ${ly}`, "leader"));
+  const anchor = dx < -20 ? "end" : dx > 20 ? "start" : "middle";
+  labels.appendChild(txt(lx + (anchor==="end"?-4:anchor==="start"?4:0), ly-3, name, "lbl", anchor));
+  labels.appendChild(txt(lx + (anchor==="end"?-4:anchor==="start"?4:0), ly+12, sub, "sub", anchor));
+}
+
+// district notes
+labels.appendChild(txt(iso(-300,-280)[0], iso(-300,-280)[1], "ZONE A — HERDR DISTRICT", "note"));
+labels.appendChild(txt(iso(420,-270)[0], iso(420,-270)[1], "ZONE C — POLICY (.SHEP/ IN YOUR REPO)", "note"));
+labels.appendChild(txt(iso(60,340)[0], iso(60,340)[1]+18, "ZONE B — ENGINE · ONE RUST BINARY", "note"));
+
+// ---------- flows ----------
+// all monochrome; line convention distinguishes the four categories
+const flowsG = document.getElementById("flows");
+const DASH = { cmd:"", evt:"7 5", poll:"1.5 3.5", out:"9 3 2 3" };
+function curve(a, b, bend=0.25) {
+  const mx=(a[0]+b[0])/2, my=(a[1]+b[1])/2;
+  const nx=-(b[1]-a[1]), ny=b[0]-a[0];
+  return `M${a[0]} ${a[1]} Q ${mx+nx*bend} ${my+ny*bend} ${b[0]} ${b[1]}`;
+}
+const FLOWDEFS = {
+  "you-cli":    ["you","cli", "cmd", .2],
+  "cli-db":     ["cli","db", "cmd", .18],
+  "sup-db":     ["supervisor","db", "poll", -.15],
+  "sup-eng":    ["supervisor","engine", "poll", .2],
+  "cfg-eng":    ["config","engine", "cmd", .2],
+  "eng-scr":    ["engine","scripts", "poll", -.18],
+  "scr-panes":  ["scripts","panes", "poll", -.15],
+  "scr-wt":     ["scripts","worktree", "poll", .12],
+  "panes-herdr":["panes","herdr", "evt", -.13],
+  "herdr-hook": ["herdr","hook", "evt", .2],
+  "hook-db":    ["hook","db", "evt", .15],
+  "scr-db":     ["scripts","db", "out", .2],
+};
+const flowPaths = {};
+for (const id in FLOWDEFS) {
+  const [f, t, kind, bend] = FLOWDEFS[id];
+  const p = pathEl(curve(anchors[f], anchors[t], bend), "flow", {"marker-end":"url(#arrR)"});
+  if (DASH[kind]) p.setAttribute("stroke-dasharray", DASH[kind]);
+  flowsG.appendChild(p); flowPaths[id] = p;
+}
+
+// ---------- info cards ----------
+const INFO = {
+  you: { t:"You + your conversational agent", r:"origin of all work",
+    h:`<p>Work starts here. You describe what you want to an agent you're already talking to; the agent picks a task type and runs <code>shep create --type feature "..."</code>. Every branch the system later takes comes from written configuration, so the choices made here are the only judgement calls in the whole flow. You also return here at handoff time: <code>shep approve</code> or <code>shep reject</code> settles any pipeline that waits for a human decision.</p>` },
+  cli: { t:"shep — the command-line tool", r:"front office · src/cmd/",
+    h:`<p>The program you (and agents) type commands into. Each command reads or writes the shared database file directly; the supervisor sees new writes the next time it checks, within a fraction of a second.</p>
+    <ul><li><code>shep create / cancel / retry / pause / resume</code> — change a task's state</li>
+    <li><code>shep approve / reject</code> — record your decision on a task waiting for one</li>
+    <li><code>shep context / read / ps / trace / types / status</code> — look things up</li>
+    <li><code>shep check submit --pass|--fail</code> — record a pass/fail verdict; shep itself records which commit was judged</li></ul>` },
+  herdr: { t:"Herdr", r:"terminal host",
+    h:`<p>The terminal application shepherd runs inside. It manages workspaces and panes, starts and watches coding agents, and notices when an agent stops working. Shepherd sends it commands through the <code>herdr</code> command-line tool (split a pane, start an agent, send a prompt) and receives notifications when a pane's agent changes status, a pane closes, or a workspace closes. Its sidebar also shows each task's status at a glance.</p>` },
+  hook: { t:"hooks/forward.sh", r:"event chute",
+    h:`<p>A two-line shell script. Whenever Herdr reports that something happened — an agent stopped, a pane closed — this script writes the notification, word for word, into the database and exits. The supervisor reads those records later and works out what changed. Because the records are only ever added, notifications survive even if the supervisor is temporarily offline.</p>` },
+  db: { t:"SQLite — the shared database file", r:"how every part talks to every other part",
+    h:`<p>One file on disk that both the command-line tool and the supervisor read and write. Writers take turns: each state change happens inside a single database transaction, and a state change and its log entry are always saved together.</p>
+    <ul><li><code>task</code> — each task's description, type, current position and status</li>
+    <li><code>check_run</code> — pass/fail verdicts, each tied to the exact commit it judged</li>
+    <li><code>event</code> — a permanent log of everything that happened (shown by <code>shep trace</code>)</li>
+    <li><code>pane_task</code> — which terminal pane belongs to which task</li>
+    <li><code>raw_event</code> — Herdr's notifications, stored word for word</li></ul>` },
+  supervisor: { t:"shep supervise", r:"the works · background process started by Herdr",
+    h:`<p>A background process with a simple loop: check the database for work, run the right step script, wait for it to finish, record the result. Each running step gets its own thread. It also reads Herdr's stored notifications to notice when an agent has stopped, then looks up the latest recorded verdict for that step to decide what happens next. If its configuration is broken at startup, it stays running, declines new work, and reports the problem through <code>shep status</code>.</p>` },
+  engine: { t:"engine/", r:"the rules for moving a task forward",
+    h:`<p>The part of the code that decides a task's next move. A <strong>type</strong> (such as <code>feature</code>) is an ordered list of <strong>pipelines</strong>; a pipeline is an ordered list of <strong>steps</strong> with its own retry rules: <code>on_fail</code> names the step to run after a failure (such as <code>fix</code>), <code>max_rounds</code> limits how many times that can happen, and <code>on_exhausted</code> says what the pipeline reports when the limit is hit. A step that passes moves the task forward; a failed verdict triggers the retry step; a step that started an agent waits for it to finish; a broken step puts the task on hold until you run <code>shep retry</code>.</p>` },
+  config: { t:".shep/config.toml", r:"blueprints · one per repository",
+    h:`<p>A configuration file, kept in the repository being worked on, that defines the pipelines and task types for that project. Each project gets its own, because the right lint and test commands differ from project to project. The file is checked strictly when loaded: misspelled keys, retry rules without a retry limit, and circular pipeline references are all reported as errors. Each type carries a short description so the agent choosing one can read the menu via <code>shep types</code>.</p>` },
+  scripts: { t:".shep/scripts/", r:"workshops · one script per step",
+    h:`<p>The scripts that do the actual work — lint, test, write code, review, fix. A step named <code>lint</code> simply runs the file <code>.shep/scripts/lint.sh</code>; putting a file there is all it takes to add a step. Each script receives its task's details as environment variables (task id, working directory, branch, round number) and reports back by printing one line of JSON as its final output: <code>pass</code>, <code>reject</code>, <code>started</code> (meaning it launched an agent that will finish later), or <code>error</code>. Everything printed before that line is kept as a log. Scripts can be written in any language.</p>` },
+  panes: { t:"Agent panes", r:"worker housing · coding agents in terminal panes",
+    h:`<p>Terminal panes where coding agents (Claude Code) do longer work you might want to watch. A step script opens a pane, links it to the task with <code>shep bind-pane</code>, starts the agent with its instructions, and reports <code>started</code>. The agent uses three commands: <code>shep context</code> to read its brief, <code>shep read</code> to fetch a referenced item, and <code>shep check submit</code> to record a verdict. When the agent stops, Herdr notices and the task moves on — the work is judged afterwards by the lint, test and review steps.</p>` },
+  worktree: { t:"git worktrees", r:"build yards · one per task",
+    h:`<p>Each task gets its own working copy of the repository, on its own branch, so several tasks can proceed at once without touching each other's files. Step scripts run inside the task's working copy. The final integrate step rebases and merges the branch — and before merging, it confirms the recorded pass verdicts were given for the exact commit being merged. When the task is done, the working copy is removed and its workspace closed.</p>` },
+};
+
+// hover: lift handled in CSS; also emphasize this building's connections
+const FLOW_ENDPOINTS = {};
+for (const id in FLOWDEFS) {
+  const [f, t] = FLOWDEFS[id];
+  (FLOW_ENDPOINTS[f] ||= []).push(id);
+  (FLOW_ENDPOINTS[t] ||= []).push(id);
+}
+document.querySelectorAll(".bld").forEach(b=>{
+  b.addEventListener("mouseenter", ()=>{
+    (FLOW_ENDPOINTS[b.dataset.id]||[]).forEach(fid=>{
+      flowPaths[fid].style.opacity = 1;
+      flowPaths[fid].style.strokeWidth = "2.2";
+    });
+  });
+  b.addEventListener("mouseleave", ()=>{
+    (FLOW_ENDPOINTS[b.dataset.id]||[]).forEach(fid=>{
+      flowPaths[fid].style.opacity = "";
+      flowPaths[fid].style.strokeWidth = "";
+    });
+  });
+});
+
+const card = document.getElementById("card");
+const flowBtnsHTML = document.getElementById("flowbtns").outerHTML;
+document.querySelectorAll(".bld").forEach(b=>{
+  b.addEventListener("click", ()=>{
+    document.querySelectorAll(".bld").forEach(x=>x.classList.remove("selected"));
+    b.classList.add("selected");
+    const i = INFO[b.dataset.id];
+    card.innerHTML = `<h2>${i.t}</h2><div class="role">${i.r}</div>${i.h}${flowBtnsHTML}`;
+    bindBtns();
+  });
+});
+
+// ---------- flow animation ----------
+const FLOWS = {
+  create:  [["you-cli","request"],["cli-db","INSERT task (queued)"]],
+  spawn:   [["sup-db","poll: queued task found"],["cfg-eng","load blueprints"],["sup-eng","advance"],["eng-scr","spawn step script"],["scr-wt","cwd = worktree"]],
+  agent:   [["scr-panes","split pane + agent start"],["panes-herdr","agent stops"],["herdr-hook","event hook"],["hook-db","append raw_event"]],
+  verdict: [["scr-db","check submit / outcome JSON"],["sup-db","poll: resolve step"],["sup-eng","advance or park"]],
+};
+FLOWS.all = [...FLOWS.create, ...FLOWS.spawn, ...FLOWS.agent, ...FLOWS.verdict];
+
+const packets = document.getElementById("packets");
+let running = false, timer = null;
+function stopFlow(){
+  running=false; clearTimeout(timer); packets.innerHTML="";
+  document.querySelectorAll(".flowbtn").forEach(x=>x.classList.remove("on"));
+  for (const k in flowPaths) flowPaths[k].style.opacity = "";
+}
+function animate(pid, label, done){
+  const path = flowPaths[pid], len = path.getTotalLength();
+  path.style.opacity = 1; path.style.strokeWidth = "1.8";
+  const dot = document.createElementNS("http://www.w3.org/2000/svg","circle");
+  dot.setAttribute("r","4.5"); dot.setAttribute("fill","#1a1a1a");
+  const t = txt(0,0,label,"flowlabel","start"); t.setAttribute("fill","#1a1a1a");
+  packets.appendChild(dot); packets.appendChild(t);
+  const dur = 800 + len*1.6; let st=null;
+  function frame(ts){
+    if (!running) return;
+    if (!st) st=ts;
+    const p = Math.min((ts-st)/dur,1), pt = path.getPointAtLength(p*len);
+    dot.setAttribute("cx",pt.x); dot.setAttribute("cy",pt.y);
+    t.setAttribute("x",pt.x+9); t.setAttribute("y",pt.y-9);
+    if (p<1) requestAnimationFrame(frame);
+    else { dot.remove(); t.remove(); path.style.opacity=""; path.style.strokeWidth=""; done&&done(); }
+  }
+  requestAnimationFrame(frame);
+}
+function runFlow(name){
+  stopFlow(); if (name==="stop") return;
+  running = true;
+  document.querySelectorAll(`.flowbtn[data-flow="${name}"]`).forEach(x=>x.classList.add("on"));
+  const seq = FLOWS[name]; let i=0;
+  (function next(){
+    if (!running) return;
+    if (i>=seq.length){ i=0; timer=setTimeout(next,800); return; }
+    const [pid,label]=seq[i++]; animate(pid,label,()=>{ timer=setTimeout(next,180); });
+  })();
+}
+function bindBtns(){ document.querySelectorAll(".flowbtn").forEach(b=>b.onclick=()=>runFlow(b.dataset.flow)); }
+bindBtns();
+</script>
+</body>
+</html>
