@@ -176,25 +176,9 @@ pub fn finish_step(
                 report.note.as_deref().unwrap_or("no reason given")
             )),
 
-            // M6 wires on_fail, max_rounds and on_exhausted. Until then a
-            // rejection has nowhere to go.
-            Outcome::Reject => {
-                let on_fail = policy
-                    .config
-                    .pipeline
-                    .get(&at.pipeline)
-                    .and_then(|p| p.on_fail.clone());
-                park(match on_fail {
-                    Some(target) => format!(
-                        "step {} rejected; the on_fail loop to {target:?} lands in M6",
-                        at.step
-                    ),
-                    None => format!(
-                        "step {} rejected and pipeline {} has no on_fail",
-                        at.step, at.pipeline
-                    ),
-                })
-            }
+            // A rejection is a verdict, not a failure: where it goes is the
+            // pipeline's `on_fail`, bounded by its `max_rounds` (PLAN §5).
+            Outcome::Reject => advance_to(&plan::after_fail(policy, task)),
 
             // A promise, not an answer. What resolves it is the pipeline's await.
             Outcome::Started => {

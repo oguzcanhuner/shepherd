@@ -61,11 +61,25 @@ no foreground command"; what it does not say is that a new pane takes a second o
 two to get there, and there is no readiness field on `pane get` — `agent_status`
 is `unknown` either way.
 
-`herdr pane process-info --pane <id>` is the test that works: it reports
-`shell_pid` and `foreground_process_group_id`, and they are equal exactly when
-nothing is running in front of the prompt. `code.sh` polls that before starting an
-agent. (Note the flag: `herdr pane process-info <pane_id>` positionally is
-"unknown option".)
+`herdr pane process-info --pane <id>` is where the answer is, but not in the field
+you would reach for first. `foreground_process_group_id` equals `shell_pid` from
+the moment the pane exists, because the shell's own rc files run as its children in
+its own process group — so comparing those two says "ready" while zsh is still
+sourcing atuin. The signal that works is the foreground process *list*: exactly one
+entry, and its pid the shell's.
+
+Probed on a fresh split, polling once a second:
+
+```
+t+1s  procs=[bash bash zsh]                     agent start → agent_pane_busy
+t+2s  procs=[printf sed zsh zsh tail zsh ...]   agent start → agent_pane_busy
+t+3s  procs=[atuin zsh]                         agent start → agent_pane_busy
+t+4s  procs=[zsh]                               agent start → accepted
+```
+
+So roughly 3-4 seconds of shell startup on this machine, and `code.sh` polls for
+that one-entry state before starting an agent. (Note the flag, too: `herdr pane
+process-info <pane_id>` positionally is "unknown option".)
 
 ## `agent start` produces a status event of its own (2026-08-18)
 
@@ -90,6 +104,45 @@ response is a `WorkspaceInfo` — no worktree path, no root pane id. So `code.sh
 
 The split is not just for the environment: it leaves the worktree's own shell pane
 next to the agent, which is where you end up standing when you go and look.
+
+## `agent prompt --wait` settles for the state it started in (2026-08-18)
+
+herdr-findings §5.3 warns that `--wait` "tracks lifecycle state, not an individual
+turn: if the agent is already working, completion of the *active* turn can satisfy
+it". The idle case is worse than that warning suggests:
+
+```
+$ herdr agent prompt w0:p2 "Reply with the word ack." --wait --until idle --until done --timeout 1200000
+{"result":{"agent":{"agent_status":"done", ...}}}     # instantly
+```
+
+An idle agent already satisfies `--until idle`, so the call returns before the agent
+has read anything. A repair step built on it would report success while the repair
+was still being typed.
+
+So `prompt_and_wait` in `.shep/scripts/lib.sh` is three calls, not one: `agent
+prompt`, then poll `agent get` until the status has left `idle` (the prompt landed),
+then `agent wait --until idle --until done`. Only the middle step makes the third
+one mean anything.
+
+## Not a Herdr finding: macOS bash and apostrophes (2026-08-18)
+
+Worth recording because it produced a step that failed with an empty error message.
+macOS ships bash 3.2, which mis-parses an apostrophe inside `${var:-default}` in a
+here-document — the quote swallows the terminator, `read` assigns nothing, and the
+prompt is an unbound variable:
+
+```bash
+f=""
+read -r -d '' p <<PROMPT
+X ${f:-the repo's rules} Y
+PROMPT
+echo "[${p:-UNSET}]"     # bash 3.2: [UNSET].  bash 5: [X the repo's rules Y]
+```
+
+Step scripts are policy in a repo, so they run under whatever `bash` that machine
+has. Every prompt default is therefore built before its heredoc, and the rule is
+written at the top of `.shep/scripts/lib.sh` where the next person will meet it.
 
 ## Hook stdout is visible and worth using
 

@@ -3,10 +3,17 @@
 # Engine in the plugin, policy in the repo (PLAN §4): these scripts judge this
 # codebase, so they are versioned with it.
 
-# Lint and test, synchronously. No agent, no pane: the fast path that has to work
-# before anything else does.
+# Lint, test, then a reading by an agent with no stake in the work. All three are
+# synchronous — `agent_review` is a headless `claude -p`, so it needs no pane.
+#
+# A rejection from any of them goes to `fix`, which re-prompts the agent already in
+# the task's pane; then the whole pipeline runs again, which is what decides whether
+# the repair worked. Three rounds, and then it stops asking (PLAN §5).
 [pipeline.review]
-steps = ["lint", "test"]
+steps        = ["lint", "test", "agent_review"]
+on_fail      = "fix"
+max_rounds   = 3
+on_exhausted = "reject"
 
 # An agent in a pane, in a worktree of its own. `code` returns `started` and the
 # task waits; what resolves it is that agent stopping, and the verdict is the
@@ -16,9 +23,9 @@ steps = ["code"]
 await = "agent_stopped"
 
 [type.check]
-description = "Lint and test this repo. No agent, no worktree, no handoff."
+description = "Lint, test and review this repo. No worktree, no handoff."
 pipelines = ["review"]
 
 [type.feature]
-description = "Hand it to an agent in its own worktree, then lint and test what it did."
+description = "Hand it to an agent in its own worktree, then lint, test and review what it did."
 pipelines = ["implement", "review"]

@@ -2,22 +2,19 @@
 # implement: put an agent in a pane, in a worktree of its own, and let it work.
 #
 # The order here is forced by Herdr (herdr-findings §5.3, §6): `worktree create`
-# returns a workspace, `agent start` never creates layout, and a pane must be at
-# an interactive prompt before an agent can be started in it. So: worktree, split,
+# returns a workspace, `agent start` never creates layout, and a pane must be at an
+# interactive prompt before an agent can be started in it. So: worktree, split,
 # bind, start, prompt — and then get out of the way. This step returns `started`,
 # which is a promise; what redeems it is the agent going `done`, and the answer
 # comes from the check it leaves behind (PLAN §7.2).
 #
-# Every stage is skippable, because a retry runs this again: a task that already
-# has a pane must not get a second worktree.
+# Every stage is skippable, because a retry runs this again: a task that already has
+# a pane must not get a second worktree.
 set -uo pipefail
+lib="$(dirname -- "$0")/lib.sh"
+# shellcheck source=lib.sh
+. "$lib" || { printf '{"outcome":"error","note":"cannot source %s"}\n' "$lib"; exit 0; }
 
-shep=${SHEP_BIN:-shep}
-die() { printf '{"outcome":"error","note":%s}\n' "$(jsonstr "$1")"; exit 0; }
-jsonstr() { printf '%s' "$1" | jq -Rs .; }
-oneline() { printf '%s' "$1" | tr '\n' ' ' | cut -c1-300; }
-
-command -v jq >/dev/null || { printf '{"outcome":"error","note":"no jq on PATH"}\n'; exit 0; }
 command -v herdr >/dev/null || die "no herdr on PATH"
 
 branch=${SHEP_BRANCH:-shep/$SHEP_TASK_ID}
@@ -29,55 +26,6 @@ agent_kind=${SHEP_AGENT_KIND:-claude}
 # before running commands would deadlock the step by design. Narrow it per repo if
 # you would rather: SHEP_AGENT_FLAGS='--permission-mode acceptEdits'.
 agent_flags=${SHEP_AGENT_FLAGS:---dangerously-skip-permissions}
-
-# Herdr reports an agent's status but says nothing about whether it can be
-# prompted, so both waits below are the difference between an unattended step that
-# works and one that silently never starts.
-
-# A freshly split pane is not an available shell straight away, and `agent start`
-# refuses a busy one with `agent_pane_busy`. Ready means the foreground process
-# group is the shell itself: nothing is running in front of the prompt.
-wait_for_shell() {
-  deadline=$((SECONDS + 20))
-  while [ "$SECONDS" -lt "$deadline" ]; do
-    if info=$(herdr pane process-info --pane "$1" 2>/dev/null) && [ "$(printf '%s' "$info" | jq -r '
-          .result.process_info
-          | (.shell_pid != null)
-            and ((.shell_pid | tostring) == (.foreground_process_group_id | tostring))')" = true ]; then
-      return 0
-    fi
-    sleep 0.2
-  done
-  return 1
-}
-
-agent_field() { herdr agent get "$1" 2>/dev/null | jq -r ".result.agent.$2 // empty"; }
-
-# `agent start` returns when Herdr can see the agent, which is a little before the
-# agent can take input — prompt into that gap and the text is swallowed with no
-# error anywhere. `interactive_ready` is the flag that closes it.
-wait_interactive() {
-  deadline=$((SECONDS + 30))
-  while [ "$SECONDS" -lt "$deadline" ]; do
-    [ "$(agent_field "$1" interactive_ready)" = true ] && return 0
-    sleep 0.3
-  done
-  return 1
-}
-
-# And a prompt that landed moves the agent off idle. If it does not, the text went
-# nowhere and this step would wait for an agent that is never going to start, so
-# it is worth one retry and then an honest error.
-took_the_prompt() {
-  deadline=$((SECONDS + 15))
-  while [ "$SECONDS" -lt "$deadline" ]; do
-    case "$(agent_field "$1" agent_status)" in
-      working | blocked | done) return 0 ;;
-    esac
-    sleep 0.5
-  done
-  return 1
-}
 
 worktree=${SHEP_WORKTREE:-}
 if [ -n "${SHEP_PANE:-}" ] && herdr pane get "$SHEP_PANE" >/dev/null 2>&1; then
