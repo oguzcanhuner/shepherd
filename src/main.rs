@@ -66,6 +66,18 @@ enum Command {
         json: bool,
     },
 
+    /// Append a Herdr event to the store. Run by hooks/forward.sh; the event
+    /// arrives in $HERDR_PLUGIN_EVENT_JSON.
+    Forward,
+
+    /// Show what Herdr has told us, newest last.
+    Raw {
+        #[arg(long, short, default_value_t = 20, value_name = "N")]
+        limit: i64,
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Stop the supervisor starting anything new.
     Pause,
 
@@ -87,6 +99,8 @@ fn main() -> Result<()> {
                 Command::Create { kind, repo, brief } => cmd::create::run(&db, &kind, repo, &brief),
                 Command::Status { json } => cmd::status::run(&db, json),
                 Command::Ps { all, json } => cmd::ps::run(&db, all, json),
+                Command::Forward => cmd::forward::run(&db),
+                Command::Raw { limit, json } => cmd::raw::run(&db, limit, json),
                 Command::Pause => cmd::pause::run(&db, true),
                 Command::Resume => cmd::pause::run(&db, false),
                 Command::Supervise { .. } => unreachable!("handled above"),

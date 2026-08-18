@@ -2,8 +2,10 @@
 //! CLI holds no logic that the supervisor does not also run.
 
 pub mod create;
+pub mod forward;
 pub mod pause;
 pub mod ps;
+pub mod raw;
 pub mod status;
 pub mod supervise;
 

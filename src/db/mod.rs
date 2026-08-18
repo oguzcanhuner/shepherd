@@ -3,6 +3,7 @@
 
 pub mod event;
 pub mod meta;
+pub mod raw_event;
 pub mod schema;
 pub mod task;
 

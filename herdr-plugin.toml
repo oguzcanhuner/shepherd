@@ -1,0 +1,52 @@
+# Shepherd as a Herdr plugin.
+#
+# The engine lives here; policy (pipelines and step scripts) lives in the repo
+# being worked on, under .shep/ (PLAN §4).
+#
+# Herdr silently ignores unknown manifest fields and only *warns* on unknown
+# event names, so a typo in either fails quietly. Check what actually registered
+# with `scripts/verify-plugin.sh`.
+
+id = "shepherd"
+name = "Shepherd"
+version = "0.1.0"
+min_herdr_version = "0.8.0"
+description = "Agent orchestration: pipelines of steps, watched in panes where that helps."
+platforms = ["macos", "linux"]
+
+[[build]]
+command = ["cargo", "build", "--release"]
+
+# The supervisor. A [[startup]] failure does not stop the Herdr server, so this
+# must never exit on bad config — it starts, refuses work, and says so through
+# `shep status` (PLAN §8).
+[[startup]]
+command = ["bash", "hooks/supervise.sh"]
+
+# The three events that can end a deferred step. `agent_status_changed` is the
+# one that matters; `exited` and `closed` cover the endings where an agent stops
+# without Herdr ever calling it `done` (PLAN §11).
+#
+# There is no previous-status field on the payload, so the edge has to be worked
+# out from what we last saw for that pane — which is why the hook only appends
+# and the supervisor decides.
+[[events]]
+on = "pane.agent_status_changed"
+command = ["bash", "hooks/forward.sh"]
+
+[[events]]
+on = "pane.exited"
+command = ["bash", "hooks/forward.sh"]
+
+# Probed 2026-08-18: closing a workspace fires neither `pane.closed` nor
+# `pane.exited` for the panes it takes with it. Since a task gets a workspace of
+# its own, closing that workspace is a perfectly ordinary way for its agent pane
+# to vanish — so without this hook, that ending is invisible. The payload has no
+# pane_id, only a workspace_id, which is why `task.workspace_id` is recorded.
+[[events]]
+on = "workspace.closed"
+command = ["bash", "hooks/forward.sh"]
+
+[[events]]
+on = "pane.closed"
+command = ["bash", "hooks/forward.sh"]
