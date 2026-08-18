@@ -715,3 +715,47 @@ pipelines = ["review"]
         other => panic!("expected the shared script, got {other:?}"),
     }
 }
+
+#[test]
+fn rule_a_looping_pipeline_may_not_nest_another() {
+    let repo = Repo::new();
+    repo.script("lint").script("fix").script("deep");
+
+    // A task records one round, scoped to the innermost pipeline (PLAN §6).
+    // Descending would overwrite the round the loop is counting.
+    let problems = repo.problems(
+        r#"
+[pipeline.inner]
+steps = ["deep"]
+
+[pipeline.review]
+steps = ["lint", "inner"]
+on_fail = "fix"
+max_rounds = 3
+
+[type.feature]
+description = "x"
+pipelines = ["review"]
+"#,
+    );
+    assert!(
+        problems.contains("would reset the round the loop is counting"),
+        "got {problems}"
+    );
+
+    // Without the loop, the same nesting is fine.
+    repo.load(
+        r#"
+[pipeline.inner]
+steps = ["deep"]
+
+[pipeline.review]
+steps = ["lint", "inner"]
+
+[type.feature]
+description = "x"
+pipelines = ["review"]
+"#,
+    )
+    .expect("nesting is only a problem where a round is being counted");
+}

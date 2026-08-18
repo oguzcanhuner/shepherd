@@ -66,6 +66,37 @@ enum Command {
         json: bool,
     },
 
+    /// Everything the store knows about one task.
+    Get {
+        #[arg(value_name = "TASK")]
+        task: String,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// What happened to a task, and what each thing led to.
+    Trace {
+        #[arg(value_name = "TASK")]
+        task: String,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Re-queue a parked task, retrying the step it stopped on.
+    Retry {
+        #[arg(value_name = "TASK")]
+        task: String,
+    },
+
+    /// Stop a task for good.
+    Cancel {
+        #[arg(value_name = "TASK")]
+        task: String,
+        /// Why, for the audit trail.
+        #[arg(long)]
+        reason: Option<String>,
+    },
+
     /// List the types a task can be created as, with their descriptions.
     Types {
         /// The repo whose policy to read. Defaults to the current repo root.
@@ -120,6 +151,10 @@ fn main() -> Result<()> {
                 Command::Validate { repo, json } => {
                     cmd::validate::run(&cmd::repo_root(repo)?, json)
                 }
+                Command::Get { task, json } => cmd::get::run(&db, &task, json),
+                Command::Trace { task, json } => cmd::trace::run(&db, &task, json),
+                Command::Retry { task } => cmd::retry::run(&db, &task),
+                Command::Cancel { task, reason } => cmd::cancel::run(&db, &task, reason),
                 Command::Forward => cmd::forward::run(&db),
                 Command::Raw { limit, json } => cmd::raw::run(&db, limit, json),
                 Command::Pause => cmd::pause::run(&db, true),

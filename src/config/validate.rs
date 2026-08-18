@@ -154,6 +154,25 @@ pub fn validate(policy: &Policy) -> Vec<Problem> {
             );
         }
         if pipeline.loops() {
+            // A task records one round (PLAN §6), scoped to the innermost
+            // pipeline. Descending into a nested pipeline from a looping one
+            // would overwrite the round the loop is counting, so the two cannot
+            // be combined.
+            for step in pipeline.steps.iter().chain(pipeline.on_fail.iter()) {
+                if let Some(inner) = policy.nested_pipeline(step) {
+                    problems.push(
+                        Problem::new(
+                            &at,
+                            format!(
+                                "this pipeline loops and step {step:?} is a pipeline: entering \
+                                 {inner:?} would reset the round the loop is counting"
+                            ),
+                        )
+                        .hint("flatten the nested steps into this pipeline, or drop the loop"),
+                    );
+                }
+            }
+
             // on_fail is one of this pipeline's steps too, so it is checked with them.
             for step in pipeline.steps.iter().chain(pipeline.on_fail.iter()) {
                 if policy

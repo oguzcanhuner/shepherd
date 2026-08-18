@@ -31,13 +31,18 @@ impl Store {
     }
 
     pub fn task(&self, brief: &str) -> Task {
+        self.task_in("/tmp/repo", "feature", brief)
+    }
+
+    /// A task governed by a repo that exists, for anything that will actually run.
+    pub fn task_in(&self, repo: &str, kind: &str, brief: &str) -> Task {
         let mut conn = self.conn();
         shepherd::engine::create_task(
             &mut conn,
             NewTask {
                 brief: brief.to_string(),
-                kind: "feature".to_string(),
-                repo: "/tmp/repo".to_string(),
+                kind: kind.to_string(),
+                repo: repo.to_string(),
             },
         )
         .expect("create task")
@@ -71,6 +76,42 @@ impl Repo {
         .expect("write");
         make_executable(&path);
         self
+    }
+
+    /// A step script with a body of your own. `$SHEP_*` is in scope.
+    pub fn script_with(&self, name: &str, body: &str) -> &Repo {
+        let path = self.dir.path().join(format!(".shep/scripts/{name}.sh"));
+        std::fs::write(&path, format!("#!/usr/bin/env bash\nset -u\n{body}\n")).expect("write");
+        make_executable(&path);
+        self
+    }
+
+    /// A step that records that it ran, in order, and passes.
+    pub fn recording_script(&self, name: &str) -> &Repo {
+        self.script_with(
+            name,
+            &format!(
+                "echo '{name}' >> \"$SHEP_REPO/.shep/order\"\n                 echo \"$SHEP_PIPELINE/$SHEP_STEP round $SHEP_ROUND\" >> \"$SHEP_REPO/.shep/positions\"\n                 echo '{{\"outcome\":\"pass\"}}'"
+            ),
+        )
+    }
+
+    /// The steps that have run, in order.
+    pub fn order(&self) -> Vec<String> {
+        std::fs::read_to_string(self.root().join(".shep/order"))
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// The positions those steps ran at, as `pipeline/step round N`.
+    pub fn positions(&self) -> Vec<String> {
+        std::fs::read_to_string(self.root().join(".shep/positions"))
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_string)
+            .collect()
     }
 
     /// A script that exists but cannot be run.
@@ -109,6 +150,73 @@ pub fn make_executable(path: &Path) {
     let mut perms = std::fs::metadata(path).expect("meta").permissions();
     perms.set_mode(0o755);
     std::fs::set_permissions(path, perms).expect("chmod");
+}
+
+/// A repo whose policy is one synchronous pipeline of one step.
+///
+/// `outcome.sh` is the step, and it says whatever `.shep/outcome` tells it to,
+/// which is how a test decides what a step reports without writing a new script.
+pub fn scripted_repo() -> Repo {
+    let repo = Repo::new();
+    let path = repo.root().join(".shep/scripts/outcome.sh");
+    std::fs::write(
+        &path,
+        r#"#!/usr/bin/env bash
+# Print whatever the test asked for. Everything before the last line is logs.
+set -u
+echo "running $SHEP_STEP for $SHEP_TASK_ID (round $SHEP_ROUND)"
+env | grep '^SHEP_' | sort > "$SHEP_REPO/.shep/last-env"
+pwd > "$SHEP_REPO/.shep/last-cwd"
+cat "$SHEP_REPO/.shep/outcome"
+exit "$(cat "$SHEP_REPO/.shep/exit" 2>/dev/null || echo 0)"
+"#,
+    )
+    .expect("write outcome.sh");
+    make_executable(&path);
+    repo.write(
+        r#"
+[pipeline.check]
+steps = ["outcome"]
+
+[type.simple]
+description = "One synchronous step, which says what the test told it to."
+pipelines = ["check"]
+"#,
+    );
+    repo.says(r#"{"outcome":"pass"}"#);
+    repo
+}
+
+impl Repo {
+    /// What `outcome.sh` will print as its last line.
+    pub fn says(&self, verdict: &str) -> &Repo {
+        std::fs::write(self.root().join(".shep/outcome"), format!("{verdict}\n"))
+            .expect("write outcome");
+        self
+    }
+
+    /// What `outcome.sh` will exit with.
+    pub fn exits(&self, code: i32) -> &Repo {
+        std::fs::write(self.root().join(".shep/exit"), format!("{code}\n")).expect("write exit");
+        self
+    }
+
+    /// The SHEP_* environment the last step run actually saw.
+    pub fn last_env(&self) -> std::collections::BTreeMap<String, String> {
+        std::fs::read_to_string(self.root().join(".shep/last-env"))
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| line.split_once('='))
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    pub fn last_cwd(&self) -> String {
+        std::fs::read_to_string(self.root().join(".shep/last-cwd"))
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    }
 }
 
 /// A pid that is certainly not running: spawn a process and reap it.

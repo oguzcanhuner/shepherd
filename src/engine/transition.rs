@@ -111,15 +111,22 @@ where
     next.updated = db::now();
     task::update(&tx, &next)?;
 
-    let mut seqs = Vec::with_capacity(events.len());
+    let mut seqs: Vec<i64> = Vec::with_capacity(events.len());
     for e in &events {
         // An event about this transition belongs to this task, whatever the
         // caller filled in.
-        let e = if e.task_id.is_none() {
+        let mut e = if e.task_id.is_none() {
             e.clone().task(task_id)
         } else {
             e.clone()
         };
+        // Within one transaction the first event is the thing that happened and
+        // the rest are its consequences, which is the tree `shep trace` draws.
+        if e.caused_by.is_none()
+            && let Some(first) = seqs.first()
+        {
+            e = e.caused_by(*first);
+        }
         seqs.push(db::event::append(&tx, &e)?);
     }
 

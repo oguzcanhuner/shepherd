@@ -1,8 +1,10 @@
 //! The store. SQLite in WAL mode is the only IPC mechanism in the system
 //! (PLAN §3, §7.4), so every connection sets the same pragmas.
 
+pub mod check;
 pub mod event;
 pub mod meta;
+pub mod pane;
 pub mod raw_event;
 pub mod schema;
 pub mod task;

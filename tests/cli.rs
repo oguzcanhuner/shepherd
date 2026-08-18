@@ -80,6 +80,120 @@ fn signal(child: &Child, sig: i32) {
     );
 }
 
+/// Wait for a task to reach a status, so the test never races the poll.
+fn wait_for_task(db: &Path, task: &str, want: &str) -> serde_json::Value {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let got: serde_json::Value =
+            serde_json::from_str(&ok(db, &["get", task, "--json"])).expect("get json");
+        if got["status"] == want {
+            return got;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "task {task} never became {want}: {got}"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+#[test]
+fn a_parked_task_explains_itself_and_can_be_retried() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = dir.path().join("shep.db");
+    let repo = common::scripted_repo();
+    let root = repo.root().to_string_lossy().to_string();
+    repo.says(r#"{"outcome":"error","note":"the linter fell over"}"#);
+
+    let task = ok(
+        &db,
+        &[
+            "create",
+            "--type",
+            "simple",
+            "--repo",
+            &root,
+            "break please",
+        ],
+    )
+    .trim()
+    .to_string();
+
+    let mut child = spawn_supervisor(&db);
+    wait_for_supervisor(&db, "running");
+    wait_for_task(&db, &task, "parked");
+
+    // The trace is the answer to "why is this stuck?".
+    let trace = ok(&db, &["trace", &task]);
+    assert!(trace.contains("task.step_started"), "got {trace}");
+    assert!(trace.contains("→ error"), "got {trace}");
+    assert!(trace.contains("the linter fell over"), "got {trace}");
+    assert!(trace.contains("task.parked"), "got {trace}");
+    // A consequence is drawn under what caused it.
+    assert!(trace.contains("└─ task.parked"), "got {trace}");
+
+    // `shep get` says where it stopped, so a retry is a considered thing to do.
+    let detail = ok(&db, &["get", &task]);
+    assert!(detail.contains("parked"), "got {detail}");
+    assert!(detail.contains("outcome"), "got {detail}");
+
+    // Fix the cause, retry, and it finishes.
+    repo.says(r#"{"outcome":"pass"}"#);
+    assert!(ok(&db, &["retry", &task]).contains("queued again"));
+    wait_for_task(&db, &task, "finished");
+
+    let trace = ok(&db, &["trace", &task]);
+    assert!(trace.contains("task.resumed"), "got {trace}");
+    assert!(trace.contains("task.finished"), "got {trace}");
+
+    signal(&child, libc::SIGTERM);
+    child.wait().expect("wait");
+
+    // And a finished task is not retryable.
+    let run = shep(&db, &["retry", &task]);
+    assert!(!run.status.success());
+    assert!(
+        run.stderr.contains("only a parked task"),
+        "got {}",
+        run.stderr
+    );
+}
+
+#[test]
+fn a_task_can_be_cancelled() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = dir.path().join("shep.db");
+    let repo = common::scripted_repo();
+    let task = ok(
+        &db,
+        &[
+            "create",
+            "--type",
+            "simple",
+            "--repo",
+            &repo.root().to_string_lossy(),
+            "never mind this one",
+        ],
+    )
+    .trim()
+    .to_string();
+
+    // No supervisor running, so nothing has started it: cancelling is just a
+    // transaction (PLAN §7.4).
+    assert!(ok(&db, &["cancel", &task, "--reason", "changed my mind"]).contains("cancelled"));
+
+    let detail: serde_json::Value =
+        serde_json::from_str(&ok(&db, &["get", &task, "--json"])).expect("json");
+    assert_eq!(detail["status"], "cancelled");
+
+    // Cancelled tasks are out of the way by default, and `--all` still shows them.
+    assert!(ok(&db, &["ps"]).contains("no open tasks"));
+    assert!(ok(&db, &["ps", "--all"]).contains(&task));
+
+    let trace = ok(&db, &["trace", &task]);
+    assert!(trace.contains("changed my mind"), "got {trace}");
+}
+
 #[test]
 fn status_on_a_store_that_does_not_exist_yet() {
     let dir = tempfile::tempdir().expect("temp dir");

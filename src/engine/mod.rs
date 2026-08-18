@@ -2,28 +2,37 @@
 //! and the supervisor are both writers and consistency comes from shared code
 //! rather than from a transport (PLAN §7.4).
 
+mod plan;
+mod step;
 mod transition;
 
-pub use transition::{Applied, Decision, Outcome, transition};
+pub use plan::Plan;
+pub use step::{StepReport, StepSpec, environment, run as run_step};
+pub use transition::{Applied, Decision, Outcome as TransitionOutcome, transition};
 
-use crate::Result;
+use crate::Outcome;
+use crate::config::{Await, Policy};
+use crate::db::event::{NewEvent, names};
+use crate::db::task::{Status, Task, TaskPatch};
 use crate::db::{self, event, task};
+use crate::{Error, Result};
 use rusqlite::Connection;
+use std::path::Path;
 
 /// Create a task: one `BEGIN IMMEDIATE` transaction that allocates the id,
 /// inserts the row and writes `task.created`. State and event commit together,
 /// always (PLAN §6).
-pub fn create_task(conn: &mut Connection, new: task::NewTask) -> Result<task::Task> {
+pub fn create_task(conn: &mut Connection, new: task::NewTask) -> Result<Task> {
     let tx = db::write_tx(conn)?;
     let now = db::now();
-    let task = task::Task {
+    let task = Task {
         id: task::next_id(&tx)?,
         brief: new.brief,
         kind: new.kind,
         pipeline: None,
         step: None,
         round: 0,
-        status: task::Status::Queued,
+        status: Status::Queued,
         human_owned: false,
         repo: new.repo,
         worktree: None,
@@ -36,15 +45,373 @@ pub fn create_task(conn: &mut Connection, new: task::NewTask) -> Result<task::Ta
     task::insert(&tx, &task)?;
     event::append(
         &tx,
-        &event::NewEvent::for_task(event::names::TASK_CREATED, &task.id).payload(
-            serde_json::json!({
-                "type": task.kind,
-                "repo": task.repo,
-                "brief": task.brief,
-            }),
-        ),
+        &NewEvent::for_task(names::TASK_CREATED, &task.id).payload(serde_json::json!({
+            "type": task.kind,
+            "repo": task.repo,
+            "brief": task.brief,
+        })),
     )?;
     tx.commit()?;
     tracing::info!(task = %task.id, kind = %task.kind, "task created");
     Ok(task)
+}
+
+/// What starting a task's next step turned out to mean.
+#[derive(Debug, Clone)]
+pub enum Started {
+    /// A step is now in flight; run this and report back with [`finish_step`].
+    Running(Box<StepSpec>),
+    /// The type's pipelines are all done.
+    Finished,
+    /// The task is parked and will not move until `shep retry`.
+    Parked { reason: String },
+    /// The row moved before the lock was taken; someone else got there first.
+    Bailed { reason: String },
+}
+
+/// Start the next step of a queued task.
+///
+/// `queued` means "ready to run its next step" and `running` means "a step is in
+/// flight right now". Keeping those apart is what makes recovery decidable: a
+/// task left `running` with no pane was synchronous and got orphaned (PLAN §11).
+pub fn begin_step(
+    conn: &mut Connection,
+    policy: &Policy,
+    task_id: &str,
+    db_path: &Path,
+) -> Result<Started> {
+    let mut chosen: Option<Plan> = None;
+    let outcome = transition(conn, task_id, |task| {
+        if task.status != Status::Queued {
+            return Ok(Decision::bail(format!(
+                "not queued any more (it is {})",
+                task.status
+            )));
+        }
+
+        // A queued task with a position already recorded is one whose previous
+        // step passed: the position *is* the next step. Planning only happens
+        // when there is nowhere yet.
+        let plan = match (task.pipeline.clone(), task.step.clone()) {
+            (Some(pipeline), Some(step)) => Plan::Run {
+                pipeline,
+                step,
+                round: task.round,
+            },
+            _ => plan::start(policy, task),
+        };
+        chosen = Some(plan.clone());
+        Ok(start_or_settle(&plan))
+    })?;
+
+    let applied = match outcome {
+        TransitionOutcome::Bailed(reason) => return Ok(Started::Bailed { reason }),
+        TransitionOutcome::Applied(applied) => applied,
+    };
+
+    match chosen.expect("a decision was applied, so one was made") {
+        Plan::Run {
+            pipeline,
+            step,
+            round,
+        } => {
+            let pane = db::pane::for_task(conn, task_id)?;
+            let spec = StepSpec::resolve(
+                policy,
+                &applied.task,
+                &pipeline,
+                &step,
+                round,
+                db_path,
+                pane,
+            )?;
+            Ok(Started::Running(Box::new(spec)))
+        }
+        Plan::Finish => Ok(Started::Finished),
+        Plan::Park { reason } => Ok(Started::Parked { reason }),
+    }
+}
+
+/// Record what a step said, and move the task accordingly.
+///
+/// One transaction: the step finishing and whatever it leads to commit together,
+/// so there is never an event for a change that didn't persist (PLAN §6).
+pub fn finish_step(
+    conn: &mut Connection,
+    policy: &Policy,
+    task_id: &str,
+    spec: &StepSpec,
+    report: &StepReport,
+) -> Result<TransitionOutcome> {
+    transition(conn, task_id, |task| {
+        // The guard: this thread is reporting on a specific step of a specific
+        // round. If any of that has moved, the report is stale.
+        if task.status != Status::Running
+            || task.step.as_deref() != Some(spec.step.as_str())
+            || task.pipeline.as_deref() != Some(spec.pipeline.as_str())
+            || task.round != spec.round
+        {
+            return Ok(Decision::bail(format!(
+                "task moved on: it is {} at {:?}/{:?} round {}, not {}/{} round {}",
+                task.status,
+                task.pipeline,
+                task.step,
+                task.round,
+                spec.pipeline,
+                spec.step,
+                spec.round
+            )));
+        }
+
+        let finished =
+            NewEvent::for_task(names::TASK_STEP_FINISHED, task_id).payload(serde_json::json!({
+                "pipeline": spec.pipeline,
+                "step": spec.step,
+                "round": spec.round,
+                "outcome": report.outcome.as_str(),
+                "note": report.note,
+            }));
+
+        let decision = match report.outcome {
+            Outcome::Pass => advance_to(&plan::after_pass(policy, task)),
+
+            Outcome::Error => park(format!(
+                "step {} errored: {}",
+                spec.step,
+                report.note.as_deref().unwrap_or("no reason given")
+            )),
+
+            // M6 wires on_fail, max_rounds and on_exhausted. Until then a
+            // rejection has nowhere to go.
+            Outcome::Reject => {
+                let on_fail = policy
+                    .config
+                    .pipeline
+                    .get(&spec.pipeline)
+                    .and_then(|p| p.on_fail.clone());
+                park(match on_fail {
+                    Some(target) => format!(
+                        "step {} rejected; the on_fail loop to {target:?} lands in M6",
+                        spec.step
+                    ),
+                    None => format!(
+                        "step {} rejected and pipeline {} has no on_fail",
+                        spec.step, spec.pipeline
+                    ),
+                })
+            }
+
+            // A promise, not an answer. What resolves it is the pipeline's await.
+            Outcome::Started => {
+                let awaits = policy
+                    .config
+                    .pipeline
+                    .get(&spec.pipeline)
+                    .and_then(|p| p.await_on);
+                match awaits {
+                    Some(await_on) => Decision::apply(TaskPatch::new()).with_event(
+                        NewEvent::for_task(names::TASK_STEP_AWAITING, task_id).payload(
+                            serde_json::json!({
+                                "pipeline": spec.pipeline,
+                                "step": spec.step,
+                                "round": spec.round,
+                                "await": await_on.as_str(),
+                                "pane": report.pane,
+                            }),
+                        ),
+                    ),
+                    None => park(format!(
+                        "step {} returned \"started\", but pipeline {} has no await, so nothing \
+                         would ever resolve it",
+                        spec.step, spec.pipeline
+                    )),
+                }
+            }
+        };
+
+        // The step_finished event comes first: it is the record of what happened,
+        // and what follows is the consequence.
+        Ok(prepend_event(decision, finished))
+    })
+}
+
+/// Move a task to where it goes next without starting it.
+///
+/// The next step is left `queued`, and the next tick starts it. That keeps the
+/// two statuses meaning one thing each — `queued` is "ready to run its next
+/// step", `running` is "a step is in flight" — which is what makes orphan
+/// recovery decidable (PLAN §11). The cost is one poll interval between steps.
+fn advance_to(plan: &Plan) -> Decision {
+    match plan {
+        Plan::Run {
+            pipeline,
+            step,
+            round,
+        } => Decision::apply(
+            TaskPatch::new()
+                .status(Status::Queued)
+                .pipeline(Some(pipeline.clone()))
+                .step(Some(step.clone()))
+                .round(*round),
+        ),
+        // These end the task, so they are the same either way.
+        Plan::Finish | Plan::Park { .. } => start_or_settle(plan),
+    }
+}
+
+/// Turn a plan into the state change that starts it.
+fn start_or_settle(plan: &Plan) -> Decision {
+    match plan {
+        Plan::Run {
+            pipeline,
+            step,
+            round,
+        } => Decision::apply(
+            TaskPatch::new()
+                .status(Status::Running)
+                .pipeline(Some(pipeline.clone()))
+                .step(Some(step.clone()))
+                .round(*round),
+        )
+        .with_event(
+            NewEvent::new(names::TASK_STEP_STARTED).payload(serde_json::json!({
+                "pipeline": pipeline,
+                "step": step,
+                "round": round,
+            })),
+        ),
+        Plan::Finish => Decision::apply(
+            TaskPatch::new()
+                .status(Status::Finished)
+                .step(None::<String>)
+                .pipeline(None::<String>),
+        )
+        .with_event(NewEvent::new(names::TASK_FINISHED)),
+        Plan::Park { reason } => park(reason.clone()),
+    }
+}
+
+/// Parking is the answer to everything the engine cannot decide. It is inert: the
+/// task sits there until `shep retry` (PLAN §1).
+fn park(reason: impl Into<String>) -> Decision {
+    let reason = reason.into();
+    Decision::apply(TaskPatch::new().status(Status::Parked)).with_event(
+        NewEvent::new(names::TASK_PARKED).payload(serde_json::json!({"reason": reason})),
+    )
+}
+
+fn prepend_event(decision: Decision, first: NewEvent) -> Decision {
+    match decision {
+        Decision::Apply { patch, events } => {
+            let mut all = vec![first];
+            all.extend(events);
+            Decision::Apply { patch, events: all }
+        }
+        bail => bail,
+    }
+}
+
+/// Park a task from outside a step: a policy that will not load, or anything else
+/// the engine cannot decide its way past.
+pub fn park_task(conn: &mut Connection, task_id: &str, reason: &str) -> Result<TransitionOutcome> {
+    transition(conn, task_id, |task| {
+        if task.status == Status::Parked || task.status.is_terminal() {
+            return Ok(Decision::bail(format!("already {}", task.status)));
+        }
+        Ok(park(reason))
+    })
+}
+
+/// Re-queue a parked task so the supervisor picks it up again, retrying the step
+/// it stopped on.
+pub fn retry(conn: &mut Connection, task_id: &str) -> Result<TransitionOutcome> {
+    transition(conn, task_id, |task| {
+        if task.status != Status::Parked {
+            return Ok(Decision::bail(format!(
+                "only a parked task can be retried, and this one is {}",
+                task.status
+            )));
+        }
+        Ok(
+            Decision::apply(TaskPatch::new().status(Status::Queued)).with_event(
+                NewEvent::new(names::TASK_RESUMED).payload(serde_json::json!({
+                    "pipeline": task.pipeline,
+                    "step": task.step,
+                    "round": task.round,
+                })),
+            ),
+        )
+    })
+}
+
+/// Stop a task for good.
+pub fn cancel(
+    conn: &mut Connection,
+    task_id: &str,
+    reason: Option<String>,
+) -> Result<TransitionOutcome> {
+    transition(conn, task_id, |task| {
+        if task.status.is_terminal() {
+            return Ok(Decision::bail(format!("already {}", task.status)));
+        }
+        Ok(
+            Decision::apply(TaskPatch::new().status(Status::Cancelled)).with_event(
+                NewEvent::new(names::TASK_CANCELLED)
+                    .payload(serde_json::json!({"reason": reason, "was": task.status.as_str()})),
+            ),
+        )
+    })
+}
+
+/// Requeue steps that were in flight when the supervisor died.
+///
+/// A task in `running` with no bound pane was synchronous and got orphaned; with
+/// a bound pane, an agent is still working and it must be left alone (PLAN §11).
+pub fn recover_orphans(conn: &mut Connection) -> Result<Vec<String>> {
+    let candidates = task::list_by_status(conn, Status::Running)?;
+    let mut recovered = Vec::new();
+    for candidate in candidates {
+        if db::pane::for_task(conn, &candidate.id)?.is_some() {
+            continue;
+        }
+        let outcome = transition(conn, &candidate.id, |task| {
+            if task.status != Status::Running {
+                return Ok(Decision::bail("no longer running"));
+            }
+            Ok(
+                Decision::apply(TaskPatch::new().status(Status::Queued)).with_event(
+                    NewEvent::new(names::TASK_RESUMED).payload(serde_json::json!({
+                        "reason": "orphaned by a supervisor that stopped mid-step",
+                        "pipeline": task.pipeline,
+                        "step": task.step,
+                        "round": task.round,
+                    })),
+                ),
+            )
+        })?;
+        if outcome.is_applied() {
+            tracing::warn!(task = %candidate.id, step = ?candidate.step, "re-queued an orphaned step");
+            recovered.push(candidate.id);
+        }
+    }
+    Ok(recovered)
+}
+
+/// Await values are config's business, but the engine needs to name them.
+pub fn awaits_human(policy: &Policy, pipeline: &str) -> bool {
+    policy
+        .config
+        .pipeline
+        .get(pipeline)
+        .and_then(|p| p.await_on)
+        == Some(Await::Human)
+}
+
+/// The policy governing a task, loaded from the repo it belongs to.
+///
+/// Loaded per task rather than once, because config is per repo root (PLAN §4)
+/// and two tasks in flight may be governed by different files.
+pub fn policy_for(task: &Task) -> Result<Policy> {
+    Policy::load(Path::new(&task.repo))
+        .map_err(|e| Error::other(format!("task {} cannot run: {e}", task.id)))
 }

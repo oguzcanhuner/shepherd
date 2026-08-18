@@ -4,11 +4,16 @@
 //! to poll the store, spawn step scripts and block on them, so aliveness is a
 //! row in `meta` rather than a connection you can dial.
 
+use crate::config::Policy;
 use crate::db::{self, event, meta, task};
+use crate::engine::{self, Started};
 use crate::{Error, Result};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 /// Default poll interval. Task creation is picked up on the next tick, which is
@@ -17,6 +22,9 @@ pub const DEFAULT_POLL: Duration = Duration::from_millis(200);
 
 /// A heartbeat older than this means the supervisor is wedged, not merely busy.
 pub const STALE_AFTER: i64 = 5;
+
+/// How long a clean shutdown waits for in-flight steps to report.
+pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 
 /// Written at most once a second, so a status check never has to guess.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -118,26 +126,165 @@ pub struct Tick {
     pub paused: bool,
     pub queued: usize,
     pub running: usize,
+    /// Steps this tick started.
+    pub started: usize,
+    /// Steps this supervisor has in flight right now.
+    pub inflight: usize,
 }
 
-/// One pass over the store.
+/// The steps this supervisor has running, one thread each.
 ///
-/// M4 is where this starts advancing tasks; for now it observes, so that the
-/// loop, the heartbeat and the pause flag can be exercised on their own.
-pub fn tick(conn: &mut Connection) -> Result<Tick> {
+/// One thread per in-flight step, blocking on `child.wait()`. At three or four
+/// concurrent tasks that is cheaper and far simpler than an async runtime
+/// (PLAN §3).
+#[derive(Default)]
+pub struct Inflight {
+    threads: HashMap<String, JoinHandle<()>>,
+}
+
+impl Inflight {
+    pub fn len(&self) -> usize {
+        self.threads.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.threads.is_empty()
+    }
+
+    /// Collect finished threads, surfacing a panic rather than swallowing it.
+    fn reap(&mut self) {
+        let done: Vec<String> = self
+            .threads
+            .iter()
+            .filter(|(_, handle)| handle.is_finished())
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in done {
+            if let Some(handle) = self.threads.remove(&id)
+                && let Err(panic) = handle.join()
+            {
+                // A panicked step thread leaves the task `running` with no pane,
+                // which is exactly what recovery re-queues.
+                tracing::error!(task = %id, "step thread panicked: {panic:?}");
+            }
+        }
+    }
+}
+
+/// One pass over the store: start what is ready, and notice what has finished.
+pub fn tick(conn: &mut Connection, db_path: &Path, inflight: &mut Inflight) -> Result<Tick> {
+    inflight.reap();
+
     if meta::is_paused(conn)? {
         return Ok(Tick {
             paused: true,
+            inflight: inflight.len(),
             ..Default::default()
         });
     }
-    let queued = task::list_by_status(conn, task::Status::Queued)?.len();
-    let running = task::list_by_status(conn, task::Status::Running)?.len();
+
+    let queued = task::list_by_status(conn, task::Status::Queued)?;
+    let mut started = 0;
+    for candidate in &queued {
+        if inflight.threads.contains_key(&candidate.id) {
+            continue;
+        }
+        if start_one(conn, db_path, inflight, &candidate.id)? {
+            started += 1;
+        }
+    }
+
     Ok(Tick {
         paused: false,
-        queued,
-        running,
+        queued: queued.len(),
+        running: task::list_by_status(conn, task::Status::Running)?.len(),
+        started,
+        inflight: inflight.len(),
     })
+}
+
+/// Start one task's next step. Returns whether a step went into flight.
+fn start_one(
+    conn: &mut Connection,
+    db_path: &Path,
+    inflight: &mut Inflight,
+    task_id: &str,
+) -> Result<bool> {
+    let task = task::require(conn, task_id)?;
+
+    // Config is per repo root, so it is loaded per task. A task whose policy will
+    // not load cannot run, and saying so on the task is more use than a line in a
+    // log nobody is reading.
+    let policy = match Policy::load(Path::new(&task.repo)) {
+        Ok(policy) => policy,
+        Err(e) => {
+            let reason = format!("policy will not load: {e}");
+            tracing::warn!(task = %task_id, "{reason}");
+            engine::park_task(conn, task_id, &reason)?;
+            return Ok(false);
+        }
+    };
+
+    match engine::begin_step(conn, &policy, task_id, db_path)? {
+        Started::Running(spec) => {
+            tracing::info!(
+                task = %task_id,
+                pipeline = %spec.pipeline,
+                step = %spec.step,
+                round = spec.round,
+                "step started"
+            );
+            let db_path = db_path.to_path_buf();
+            let owned = task_id.to_string();
+            let handle = std::thread::spawn(move || run_and_report(db_path, policy, spec, owned));
+            inflight.threads.insert(task_id.to_string(), handle);
+            Ok(true)
+        }
+        Started::Finished => {
+            tracing::info!(task = %task_id, "task finished");
+            Ok(false)
+        }
+        Started::Parked { reason } => {
+            tracing::warn!(task = %task_id, "task parked: {reason}");
+            Ok(false)
+        }
+        Started::Bailed { reason } => {
+            tracing::debug!(task = %task_id, "not started: {reason}");
+            Ok(false)
+        }
+    }
+}
+
+/// Run a step to completion, then record what it said.
+///
+/// This is the whole of the supervisor's work: spawn, block, write (PLAN §3).
+fn run_and_report(db_path: PathBuf, policy: Policy, spec: Box<engine::StepSpec>, task_id: String) {
+    let report = engine::run_step(&spec);
+    if !report.logs.trim().is_empty() {
+        tracing::debug!(task = %task_id, step = %spec.step, "step output:\n{}", report.logs);
+    }
+    tracing::info!(
+        task = %task_id,
+        step = %spec.step,
+        outcome = report.outcome.as_str(),
+        note = report.note.as_deref().unwrap_or(""),
+        "step finished"
+    );
+
+    // A fresh connection: this is another writer, and the store is the only thing
+    // these two threads share.
+    let result = db::open(&db_path)
+        .and_then(|mut conn| engine::finish_step(&mut conn, &policy, &task_id, &spec, &report));
+    match result {
+        Ok(outcome) => {
+            if let crate::engine::TransitionOutcome::Bailed(reason) = outcome {
+                tracing::warn!(task = %task_id, "step result discarded: {reason}");
+            }
+        }
+        // Nothing to do but say so: the task stays `running` with no pane, and
+        // recovery re-queues it when the supervisor next starts.
+        Err(e) => tracing::error!(task = %task_id, "could not record step result: {e}"),
+    }
 }
 
 static SHUTDOWN: AtomicBool = AtomicBool::new(false);
@@ -203,16 +350,24 @@ pub fn run(conn: &mut Connection, poll: Duration, max_ticks: Option<u64>) -> Res
     )?;
     tracing::info!(pid = std::process::id(), seq, "supervisor started");
 
-    // §11: a task left `running` with no bound pane was synchronous and got
-    // orphaned when the supervisor died. Re-running it belongs with step
-    // spawning, in M4.
+    // A task left `running` with no bound pane was synchronous and got orphaned
+    // when the last supervisor stopped (PLAN §11).
+    let db_path = PathBuf::from(
+        conn.path()
+            .ok_or_else(|| Error::other("the store has no path, so steps could not find it"))?,
+    );
+    let recovered = engine::recover_orphans(conn)?;
+    if !recovered.is_empty() {
+        tracing::warn!(count = recovered.len(), "re-queued orphaned steps");
+    }
 
+    let mut inflight = Inflight::default();
     let mut ticks = 0u64;
     let mut last_beat = started;
     let mut last_report = Tick::default();
 
     while !shutdown_requested() {
-        let observed = tick(conn)?;
+        let observed = tick(conn, &db_path, &mut inflight)?;
         ticks += 1;
 
         // Only when something changed, so info level stays readable.
@@ -221,6 +376,7 @@ pub fn run(conn: &mut Connection, poll: Duration, max_ticks: Option<u64>) -> Res
                 paused = observed.paused,
                 queued = observed.queued,
                 running = observed.running,
+                inflight = observed.inflight,
                 "tick"
             );
             last_report = observed;
@@ -236,6 +392,21 @@ pub fn run(conn: &mut Connection, poll: Duration, max_ticks: Option<u64>) -> Res
             break;
         }
         std::thread::sleep(poll);
+    }
+
+    // Give in-flight steps a moment to report, but do not wait on a `pytest`:
+    // abandoning them is safe, because a `running` task with no pane is re-queued
+    // on the next start.
+    let grace = std::time::Instant::now() + SHUTDOWN_GRACE;
+    while !inflight.is_empty() && std::time::Instant::now() < grace {
+        inflight.reap();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    if !inflight.is_empty() {
+        tracing::warn!(
+            count = inflight.len(),
+            "left steps in flight; they will be re-queued on the next start"
+        );
     }
 
     // Clearing the heartbeat is what makes `shep status` instantly correct after

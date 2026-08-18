@@ -5,7 +5,7 @@ mod common;
 
 use common::{Store, dead_pid};
 use shepherd::db::{meta, task};
-use shepherd::supervisor::{self, Health, Heartbeat, STALE_AFTER};
+use shepherd::supervisor::{self, Health, Heartbeat, Inflight, STALE_AFTER};
 use std::time::Duration;
 
 fn write_heartbeat(conn: &rusqlite::Connection, pid: i32, beat: i64) {
@@ -127,8 +127,10 @@ fn a_dead_supervisors_heartbeat_does_not_block_a_new_one() {
 #[test]
 fn a_tick_sees_what_is_queued_and_running() {
     let store = Store::new();
-    store.task("first");
-    let second = store.task("second");
+    let repo = common::scripted_repo();
+    let root = repo.root().to_string_lossy().to_string();
+    store.task_in(&root, "simple", "first");
+    let second = store.task_in(&root, "simple", "second");
     let mut conn = store.conn();
 
     shepherd::engine::transition(&mut conn, &second.id, |_| {
@@ -138,24 +140,27 @@ fn a_tick_sees_what_is_queued_and_running() {
     })
     .expect("claim");
 
-    let tick = supervisor::tick(&mut conn).expect("tick");
+    let tick = supervisor::tick(&mut conn, store.path(), &mut Inflight::default()).expect("tick");
     assert_eq!(tick.queued, 1);
-    assert_eq!(tick.running, 1);
     assert!(!tick.paused);
 }
 
 #[test]
 fn pausing_stops_the_tick_looking_for_work() {
     let store = Store::new();
-    store.task("do not start me");
+    let repo = common::scripted_repo();
+    store.task_in(&repo.root().to_string_lossy(), "simple", "do not start me");
     let mut conn = store.conn();
 
     meta::set_paused(&conn, true).expect("pause");
-    let tick = supervisor::tick(&mut conn).expect("tick");
+    let mut inflight = Inflight::default();
+    let tick = supervisor::tick(&mut conn, store.path(), &mut inflight).expect("tick");
     assert!(tick.paused);
     assert_eq!(tick.queued, 0, "a paused tick does not go looking for work");
+    assert_eq!(tick.started, 0);
 
     meta::set_paused(&conn, false).expect("resume");
     assert!(!meta::is_paused(&conn).expect("flag"));
-    assert_eq!(supervisor::tick(&mut conn).expect("tick").queued, 1);
+    let tick = supervisor::tick(&mut conn, store.path(), &mut inflight).expect("tick");
+    assert_eq!(tick.queued, 1);
 }

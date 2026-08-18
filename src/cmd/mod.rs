@@ -1,13 +1,17 @@
 //! One module per subcommand. Each is a thin shell over `engine` and `db`: the
 //! CLI holds no logic that the supervisor does not also run.
 
+pub mod cancel;
 pub mod create;
 pub mod forward;
+pub mod get;
 pub mod pause;
 pub mod ps;
 pub mod raw;
+pub mod retry;
 pub mod status;
 pub mod supervise;
+pub mod trace;
 pub mod types;
 pub mod validate;
 

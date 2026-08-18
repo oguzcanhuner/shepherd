@@ -13,6 +13,8 @@ pub mod names {
     pub const TASK_CREATED: &str = "task.created";
     pub const TASK_STEP_STARTED: &str = "task.step_started";
     pub const TASK_STEP_FINISHED: &str = "task.step_finished";
+    /// A step returned `started`: the answer comes later, per the pipeline's await.
+    pub const TASK_STEP_AWAITING: &str = "task.step_awaiting";
     pub const TASK_PIPELINE_STARTED: &str = "task.pipeline_started";
     pub const TASK_PIPELINE_FINISHED: &str = "task.pipeline_finished";
     pub const TASK_PARKED: &str = "task.parked";

@@ -6,7 +6,7 @@ mod common;
 use common::Store;
 use shepherd::db::task::{Status, TaskPatch};
 use shepherd::db::{event, task};
-use shepherd::engine::{Decision, Outcome, transition};
+use shepherd::engine::{Decision, TransitionOutcome, transition};
 use shepherd::{Error, engine};
 
 /// The M1 hammer: several writers, each on its own connection, incrementing the
@@ -155,8 +155,8 @@ fn bailing_leaves_the_row_alone() {
     .expect("bail is a normal outcome");
 
     match outcome {
-        Outcome::Bailed(reason) => assert!(reason.contains("moved")),
-        Outcome::Applied(_) => panic!("expected a bail"),
+        TransitionOutcome::Bailed(reason) => assert!(reason.contains("moved")),
+        TransitionOutcome::Applied(_) => panic!("expected a bail"),
     }
     assert_eq!(task::require(&conn, &task.id).expect("task"), task);
 }

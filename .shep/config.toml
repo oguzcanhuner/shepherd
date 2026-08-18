@@ -1,0 +1,13 @@
+# Shepherd's own policy — this repo is its own first target.
+#
+# Engine in the plugin, policy in the repo (PLAN §4): these scripts judge this
+# codebase, so they are versioned with it.
+
+# Lint and test, synchronously. No agent, no pane: the fast path that has to work
+# before anything else does.
+[pipeline.review]
+steps = ["lint", "test"]
+
+[type.check]
+description = "Lint and test this repo. No agent, no worktree, no handoff."
+pipelines = ["review"]
