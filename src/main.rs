@@ -66,6 +66,23 @@ enum Command {
         json: bool,
     },
 
+    /// List the types a task can be created as, with their descriptions.
+    Types {
+        /// The repo whose policy to read. Defaults to the current repo root.
+        #[arg(long, value_name = "PATH")]
+        repo: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Check this repo's .shep/config.toml and report every problem with it.
+    Validate {
+        #[arg(long, value_name = "PATH")]
+        repo: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Append a Herdr event to the store. Run by hooks/forward.sh; the event
     /// arrives in $HERDR_PLUGIN_EVENT_JSON.
     Forward,
@@ -99,6 +116,10 @@ fn main() -> Result<()> {
                 Command::Create { kind, repo, brief } => cmd::create::run(&db, &kind, repo, &brief),
                 Command::Status { json } => cmd::status::run(&db, json),
                 Command::Ps { all, json } => cmd::ps::run(&db, all, json),
+                Command::Types { repo, json } => cmd::types::run(&cmd::repo_root(repo)?, json),
+                Command::Validate { repo, json } => {
+                    cmd::validate::run(&cmd::repo_root(repo)?, json)
+                }
                 Command::Forward => cmd::forward::run(&db),
                 Command::Raw { limit, json } => cmd::raw::run(&db, limit, json),
                 Command::Pause => cmd::pause::run(&db, true),

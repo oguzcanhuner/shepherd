@@ -1,5 +1,6 @@
 //! End to end through the real binary: `shep status` must be right with the
-//! supervisor up, stopped cleanly, and killed outright (M1).
+//! supervisor up, stopped cleanly, and killed outright (M1), and the commands
+//! that read policy must behave the way an agent needs them to (M3).
 
 mod common;
 
@@ -98,6 +99,8 @@ fn status_on_a_store_that_does_not_exist_yet() {
 fn create_then_list_then_pause() {
     let dir = tempfile::tempdir().expect("temp dir");
     let db = dir.path().join("shep.db");
+    let repo = policy_repo();
+    let root = repo.root().to_string_lossy().to_string();
 
     let id = ok(
         &db,
@@ -106,7 +109,7 @@ fn create_then_list_then_pause() {
             "--type",
             "feature",
             "--repo",
-            "/tmp",
+            &root,
             "add a widget",
         ],
     )
@@ -134,6 +137,177 @@ fn create_then_list_then_pause() {
     assert_eq!(status_json(&db)["paused"], true);
     assert!(ok(&db, &["resume"]).contains("resumed"));
     assert_eq!(status_json(&db)["paused"], false);
+}
+
+/// A repo with the config from PLAN §5, for the commands that read policy.
+fn policy_repo() -> common::Repo {
+    let repo = common::Repo::new();
+    for step in [
+        "code",
+        "lint",
+        "test",
+        "agent_review",
+        "fix",
+        "show_diff",
+        "integrate",
+    ] {
+        repo.script(step);
+    }
+    repo.write(
+        r#"
+[pipeline.implement]
+steps = ["code"]
+await = "agent_stopped"
+
+[pipeline.review]
+steps        = ["lint", "test", "agent_review"]
+on_fail      = "fix"
+max_rounds   = 3
+on_exhausted = "reject"
+
+[pipeline.handoff]
+steps = ["show_diff"]
+await = "human"
+
+[pipeline.integrate]
+steps = ["integrate"]
+
+[type.feature]
+description = "Normal change. Reviewed, then shown to you."
+pipelines   = ["implement", "review", "handoff", "integrate"]
+
+[type.hotfix]
+description = "Urgent production fix. No review, no handoff."
+pipelines   = ["implement", "integrate"]
+"#,
+    );
+    repo
+}
+
+#[test]
+fn types_prints_the_menu_an_agent_chooses_from() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = dir.path().join("shep.db");
+    let repo = policy_repo();
+
+    let out = ok(&db, &["types", "--repo", &repo.root().to_string_lossy()]);
+    assert!(out.contains("feature"), "got {out}");
+    assert!(out.contains("Normal change"), "got {out}");
+    assert!(out.contains("hotfix"), "got {out}");
+    assert!(out.contains("implement"), "got {out}");
+
+    let json: serde_json::Value = serde_json::from_str(&ok(
+        &db,
+        &["types", "--repo", &repo.root().to_string_lossy(), "--json"],
+    ))
+    .expect("json");
+    assert_eq!(json[0]["type"], "feature");
+    assert_eq!(json[0]["pipelines"][0], "implement");
+}
+
+#[test]
+fn validate_reports_a_good_config_and_a_bad_one() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = dir.path().join("shep.db");
+    let repo = policy_repo();
+    let root = repo.root().to_string_lossy().to_string();
+
+    let out = ok(&db, &["validate", "--repo", &root]);
+    assert!(out.contains("is valid"), "got {out}");
+    // It shows what each step resolved to, since the filename is the registration.
+    assert!(out.contains("lint.sh"), "got {out}");
+    assert!(out.contains("await human"), "got {out}");
+    assert!(out.contains("on_fail → fix"), "got {out}");
+
+    let json: serde_json::Value =
+        serde_json::from_str(&ok(&db, &["validate", "--repo", &root, "--json"])).expect("json");
+    assert_eq!(json["valid"], true);
+
+    // Now break it.
+    repo.write("[pipeline.review]\nsteps = [\"nope\"]\n");
+    let run = shep(&db, &["validate", "--repo", &root]);
+    assert!(!run.status.success(), "a broken config must exit non-zero");
+    assert!(run.stderr.contains("nope"), "got {}", run.stderr);
+    assert!(
+        run.stderr.contains("no types defined"),
+        "got {}",
+        run.stderr
+    );
+
+    let run = shep(&db, &["validate", "--repo", &root, "--json"]);
+    assert!(!run.status.success());
+    let json: serde_json::Value = serde_json::from_str(&run.stdout).expect("json");
+    assert_eq!(json["valid"], false);
+    assert!(json["problems"].as_array().expect("array").len() >= 2);
+}
+
+#[test]
+fn an_invalid_type_returns_the_menu_and_creates_nothing() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = dir.path().join("shep.db");
+    let repo = policy_repo();
+    let root = repo.root().to_string_lossy().to_string();
+
+    let run = shep(
+        &db,
+        &[
+            "create",
+            "--type",
+            "refactor",
+            "--repo",
+            &root,
+            "do a thing",
+        ],
+    );
+    assert!(!run.status.success());
+    assert!(
+        run.stderr.contains("unknown type \"refactor\""),
+        "got {}",
+        run.stderr
+    );
+    // The agent that guessed wrong is the one that has to choose again.
+    assert!(run.stderr.contains("feature"), "got {}", run.stderr);
+    assert!(
+        run.stderr.contains("Urgent production fix"),
+        "got {}",
+        run.stderr
+    );
+
+    // And no task was queued that could never have run.
+    let rows: serde_json::Value = serde_json::from_str(&ok(&db, &["ps", "--json"])).expect("json");
+    assert_eq!(rows.as_array().expect("array").len(), 0);
+
+    // The valid type does create one.
+    let id = ok(
+        &db,
+        &["create", "--type", "feature", "--repo", &root, "do a thing"],
+    );
+    assert_eq!(id.trim(), "t-1");
+}
+
+#[test]
+fn creating_in_a_repo_with_no_policy_says_so() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = dir.path().join("shep.db");
+    let bare = tempfile::tempdir().expect("temp dir");
+
+    let run = shep(
+        &db,
+        &[
+            "create",
+            "--type",
+            "feature",
+            "--repo",
+            &bare.path().to_string_lossy(),
+            "x",
+        ],
+    );
+    assert!(!run.status.success());
+    assert!(
+        run.stderr.contains(".shep/config.toml"),
+        "got {}",
+        run.stderr
+    );
 }
 
 #[test]
@@ -204,6 +378,7 @@ fn a_task_created_while_the_supervisor_runs_is_seen_by_it() {
 
     // No IPC: the create is a transaction, and the supervisor notices on its
     // next poll (PLAN §7.4).
+    let repo = policy_repo();
     ok(
         &db,
         &[
@@ -211,7 +386,7 @@ fn a_task_created_while_the_supervisor_runs_is_seen_by_it() {
             "--type",
             "feature",
             "--repo",
-            "/tmp",
+            &repo.root().to_string_lossy(),
             "seen me yet",
         ],
     );

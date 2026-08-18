@@ -6,11 +6,14 @@
 //! transport (PLAN §7.4).
 
 pub mod cmd;
+pub mod config;
 pub mod db;
 pub mod engine;
 pub mod error;
 pub mod logging;
+pub mod outcome;
 pub mod paths;
 pub mod supervisor;
 
 pub use error::{Error, Result};
+pub use outcome::Outcome;

@@ -8,6 +8,29 @@ pub mod ps;
 pub mod raw;
 pub mod status;
 pub mod supervise;
+pub mod types;
+pub mod validate;
+
+/// Which repo's policy governs this invocation.
+///
+/// Config is loaded per repo root, not globally (PLAN §4), so every command that
+/// touches policy has to answer this the same way.
+pub fn repo_root(given: Option<std::path::PathBuf>) -> anyhow::Result<std::path::PathBuf> {
+    if let Some(path) = given {
+        return std::fs::canonicalize(&path)
+            .map_err(|e| anyhow::anyhow!("{}: {e}", path.display()));
+    }
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output();
+    if let Some(out) = out.ok().filter(|o| o.status.success()) {
+        let root = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !root.is_empty() {
+            return Ok(std::path::PathBuf::from(root));
+        }
+    }
+    Ok(std::env::current_dir()?)
+}
 
 /// A duration rendered the way you'd say it out loud. Used by every table.
 pub fn ago(seconds: i64) -> String {
