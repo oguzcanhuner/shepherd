@@ -45,6 +45,31 @@ impl Decision {
     pub fn bail(reason: impl Into<String>) -> Self {
         Decision::Bail(reason.into())
     }
+
+    /// Add to the decision's patch, leaving a bail alone.
+    pub fn map_patch(self, add: impl FnOnce(task::TaskPatch) -> task::TaskPatch) -> Self {
+        match self {
+            Decision::Apply { patch, events } => Decision::Apply {
+                patch: add(patch),
+                events,
+            },
+            bail => bail,
+        }
+    }
+
+    /// Put an event before the decision's own, leaving a bail alone. Within one
+    /// transaction the first event is the thing that happened and the rest are
+    /// its consequences, so order is meaning here.
+    pub fn preceded_by(self, first: NewEvent) -> Self {
+        match self {
+            Decision::Apply { patch, events } => {
+                let mut all = vec![first];
+                all.extend(events);
+                Decision::Apply { patch, events: all }
+            }
+            bail => bail,
+        }
+    }
 }
 
 /// A committed transition.
