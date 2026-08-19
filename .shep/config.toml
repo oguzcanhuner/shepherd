@@ -16,23 +16,18 @@ max_rounds   = 3
 on_exhausted = "reject"
 
 # An agent in a pane, in a worktree of its own. `code` returns `started` and the
-# task waits; what resolves it is that agent stopping, and the verdict is the
-# check it left behind.
+# task waits; what resolves it is that agent stopping — `await` is on the step —
+# and the verdict is the check it left behind.
 [pipeline.implement]
-steps = ["code"]
-await = "agent_stopped"
-
-# Hand it over. `show_diff` splits a pane, focuses it and notifies; then nothing
-# happens at all until you say so — not even the agent going busy in its own pane
-#.
-[pipeline.handoff]
-steps = ["show_diff"]
-await = "human"
+steps = [{ run = "code", await = "agent_stopped" }]
 
 [type.check]
 description = "Lint, test and review this repo. No worktree, no handoff."
 pipelines = ["review"]
 
+# Hand it to an agent, review what it did, then let it rest for you. There is no
+# handoff step: when the plan is spent the task rests with its pane open, and you
+# take over — look at `show_diff`'s pane, then carry it on with `shep run`.
 [type.feature]
-description = "Hand it to an agent in its own worktree, review what it did, then show it to you."
-pipelines = ["implement", "review", "handoff"]
+description = "Hand it to an agent in its own worktree, review what it did, then it rests for you."
+pipelines = ["implement", "review"]
