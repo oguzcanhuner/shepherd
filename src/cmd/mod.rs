@@ -14,6 +14,7 @@ pub mod ps;
 pub mod raw;
 pub mod retry;
 pub mod settle;
+pub mod signal;
 pub mod skill;
 pub mod status;
 pub mod supervise;

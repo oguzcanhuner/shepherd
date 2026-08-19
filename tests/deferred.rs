@@ -166,7 +166,7 @@ fn an_agent_that_works_and_stops_carries_the_task_on() {
     let finished = settle(&store, &task.id, &mut inflight);
     assert_eq!(
         finished.status,
-        Status::Finished,
+        Status::Resting,
         "the agent stopped, review ran, and nobody was asked anything"
     );
     // The synchronous pipeline after it ran, in the worktree.
@@ -254,6 +254,165 @@ fn an_agent_that_stops_without_a_check_parks_the_task() {
 }
 
 #[test]
+fn a_custom_signal_resolves_a_deferred_step() {
+    use shepherd::config::Policy;
+    let store = Store::new();
+    let repo = common::Repo::new();
+    // A step that pushes and defers on a declared `ci` signal — no agent, no
+    // pane. Only `shep signal --name ci` (or the engine call below) resolves it.
+    repo.script_with("deploy", r#"printf '{"outcome":"started"}\n'"#);
+    repo.recording_script("smoke");
+    repo.write(
+        r#"
+[signal.ci]
+description = "GitHub Actions result for the pushed commit"
+
+[pipeline.ship]
+steps = [{ run = "deploy", await = "ci" }]
+
+[pipeline.after]
+steps = ["smoke"]
+
+[type.shipit]
+description = "Deploy, wait for CI, then run smoke."
+pipelines = ["ship", "after"]
+"#,
+    );
+    repo.git_init();
+    let root = repo.root().to_string_lossy().to_string();
+    let policy = Policy::load(Path::new(&root)).expect("policy");
+
+    // Drive to the awaiting point.
+    let created = store.task_in(&root, "shipit", "ship it");
+    let mut inflight = Inflight::default();
+    let task = settle(&store, &created.id, &mut inflight);
+    assert_eq!(task.status, Status::Running, "waits on the ci signal");
+    assert_eq!(task.step.as_deref(), Some("deploy"));
+
+    // An agent-stop event must NOT resolve a step awaiting `ci`.
+    let pane = format!("wZ:{}", task.id);
+    herdr_said(&store, &agent_status(&pane, "working"));
+    herdr_said(&store, &agent_status(&pane, "done"));
+    let still = settle(&store, &task.id, &mut inflight);
+    assert_eq!(
+        still.step.as_deref(),
+        Some("deploy"),
+        "only the ci signal resolves it, not an agent stopping"
+    );
+
+    // CI reports green: the step passes and the pipeline advances.
+    let mut conn = store.conn();
+    let (check, _) = engine::settle_by_signal(
+        &mut conn,
+        &policy,
+        &task.id,
+        "ci",
+        Conclusion::Pass,
+        "ci",
+        Some("green".into()),
+    )
+    .expect("signal resolves the step");
+    drop(conn);
+    assert_eq!(check.conclusion, Conclusion::Pass);
+
+    let after = settle(&store, &task.id, &mut inflight);
+    assert_eq!(after.status, Status::Resting, "ci --pass finished it");
+    assert_eq!(repo.order(), vec!["smoke"], "the next pipeline ran");
+}
+
+#[test]
+fn a_deferred_step_times_out_with_its_on_timeout_verdict() {
+    let store = Store::new();
+    let repo = common::Repo::new();
+    repo.script_with("deploy", r#"printf '{"outcome":"started"}\n'"#);
+    repo.write(
+        r#"
+[signal.ci]
+description = "CI"
+
+[pipeline.ship]
+steps = [{ run = "deploy", await = "ci", timeout = "1h", on_timeout = "pass" }]
+
+[type.shipit]
+description = "Deploy, wait for CI."
+pipelines = ["ship"]
+"#,
+    );
+    repo.git_init();
+    let root = repo.root().to_string_lossy().to_string();
+
+    let created = store.task_in(&root, "shipit", "ship it");
+    let mut inflight = Inflight::default();
+    let task = settle(&store, &created.id, &mut inflight);
+    assert_eq!(task.step.as_deref(), Some("deploy"), "waiting on ci");
+    assert!(task.await_deadline.is_some(), "a timeout set a deadline");
+
+    // Move the deadline into the past — the supervisor fires it on the next tick.
+    store
+        .conn()
+        .execute(
+            "UPDATE task SET await_deadline = ?1 WHERE id = ?2",
+            rusqlite::params![db::now() - 1, task.id],
+        )
+        .expect("age the deadline");
+
+    let after = settle(&store, &task.id, &mut inflight);
+    // on_timeout = pass, so the timed-out step passes, ship passes, and with the
+    // plan spent the task comes to rest.
+    assert_eq!(after.status, Status::Resting, "got {after:?}");
+    let finished = kinds_of(&store, &task.id);
+    assert!(
+        finished.iter().any(|k| k == "task.step_finished"),
+        "the timeout resolved the step: {finished:?}"
+    );
+}
+
+#[test]
+fn a_signal_for_the_wrong_name_is_declined() {
+    use shepherd::config::Policy;
+    let store = Store::new();
+    let repo = common::Repo::new();
+    repo.script_with("deploy", r#"printf '{"outcome":"started"}\n'"#);
+    repo.recording_script("smoke");
+    repo.write(
+        r#"
+[signal.ci]
+description = "CI"
+
+[pipeline.ship]
+steps = [{ run = "deploy", await = "ci" }]
+
+[type.shipit]
+description = "Deploy, wait for CI."
+pipelines = ["ship"]
+"#,
+    );
+    repo.git_init();
+    let root = repo.root().to_string_lossy().to_string();
+    let policy = Policy::load(Path::new(&root)).expect("policy");
+    let created = store.task_in(&root, "shipit", "ship it");
+    let mut inflight = Inflight::default();
+    let task = settle(&store, &created.id, &mut inflight);
+
+    // The step awaits `ci`, so a `deploy` signal must not resolve it.
+    let mut conn = store.conn();
+    let err = engine::settle_by_signal(
+        &mut conn,
+        &policy,
+        &task.id,
+        "deploy_done",
+        Conclusion::Pass,
+        "someone",
+        None,
+    )
+    .expect_err("a mismatched signal name is refused");
+    assert!(
+        err.to_string().contains("not awaiting signal"),
+        "got {err}"
+    );
+}
+
+#[test]
 fn on_stop_pass_lets_a_checkless_stop_advance() {
     let store = Store::new();
     let repo = deferred_repo(SHEP);
@@ -262,9 +421,7 @@ fn on_stop_pass_lets_a_checkless_stop_advance() {
     repo.write(
         r#"
 [pipeline.implement]
-steps = ["launch"]
-await = "agent_stopped"
-on_stop = "pass"
+steps = [{ run = "launch", await = "agent_stopped", on_missing = "pass" }]
 
 [pipeline.after]
 steps = ["verify"]
@@ -283,7 +440,7 @@ pipelines = ["implement", "after"]
 
     assert_eq!(
         after.status,
-        Status::Finished,
+        Status::Resting,
         "stopping with no check is this pipeline's pass"
     );
     assert_eq!(repo.order(), vec!["verify"], "the next pipeline ran");
@@ -296,9 +453,7 @@ fn a_check_still_wins_over_on_stop() {
     repo.write(
         r#"
 [pipeline.implement]
-steps = ["launch"]
-await = "agent_stopped"
-on_stop = "pass"
+steps = [{ run = "launch", await = "agent_stopped", on_missing = "pass" }]
 
 [pipeline.after]
 steps = ["verify"]
@@ -355,7 +510,7 @@ fn a_pane_that_exits_resolves_the_step_too() {
     herdr_said(&store, &pane_gone("exited", &pane));
     let finished = settle(&store, &task.id, &mut inflight);
 
-    assert_eq!(finished.status, Status::Finished);
+    assert_eq!(finished.status, Status::Resting);
     let conn = store.conn();
     assert_eq!(
         pane::last_status(&conn, &pane).expect("status"),
@@ -376,26 +531,7 @@ fn a_closed_workspace_resolves_the_task_it_took_with_it() {
     herdr_said(&store, &workspace_closed("wZ"));
     let finished = settle(&store, &task.id, &mut inflight);
 
-    assert_eq!(finished.status, Status::Finished);
-}
-
-#[test]
-fn nothing_but_a_person_resolves_a_handoff() {
-    let store = Store::new();
-    let repo = deferred_repo(SHEP);
-    let (task, mut inflight) = awaiting(&store, &repo, "handed");
-    check_for(&store, &task, Conclusion::Pass);
-    let pane = format!("wZ:{}", task.id);
-
-    // You are talking to the agent, so it goes working → done as often as you
-    // like. `await = "human"` means none of that moves the state machine.
-    for status in ["working", "done", "working", "done"] {
-        herdr_said(&store, &agent_status(&pane, status));
-    }
-    let after = settle(&store, &task.id, &mut inflight);
-
-    assert_eq!(after.status, Status::Running);
-    assert_eq!(after.step.as_deref(), Some("launch"));
+    assert_eq!(finished.status, Status::Resting);
 }
 
 #[test]
@@ -459,7 +595,7 @@ fn a_supervisor_that_was_down_still_sees_the_agent_finish() {
     drop(conn);
 
     let finished = settle(&store, &task.id, &mut inflight);
-    assert_eq!(finished.status, Status::Finished);
+    assert_eq!(finished.status, Status::Resting);
 }
 
 #[test]
@@ -519,7 +655,7 @@ fn pausing_holds_the_events_as_well_as_the_work() {
     meta::set_paused(&conn, false).expect("resume");
     drop(conn);
     let finished = settle(&store, &task.id, &mut inflight);
-    assert_eq!(finished.status, Status::Finished);
+    assert_eq!(finished.status, Status::Resting);
 }
 
 // ------------------------------------------------- what an agent in a pane has

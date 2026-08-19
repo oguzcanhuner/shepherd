@@ -26,13 +26,13 @@ mod step;
 mod transition;
 
 pub use binding::{Binding, bind_pane};
-pub use checks::{Submission, settle_by_human, submit_check};
+pub use checks::{Submission, settle_by_signal, submit_check};
 pub use flow::{Started, begin_step, finish_step};
 pub use lifecycle::{cancel, create_task, park_task, retry, run_pipeline};
 pub use plan::Plan;
-pub use policy::{awaits_human, policy_for};
+pub use policy::policy_for;
 pub use recovery::recover_orphans;
-pub use resolve::{AgentStatus, Drained, drain};
+pub use resolve::{AgentStatus, Drained, drain, fire_timeouts};
 pub use step::{StepAt, StepReport, StepSpec, environment, run as run_step};
 pub use transition::{
     Applied, Decision, Outcome as TransitionOutcome, transition, transition_with,

@@ -5,7 +5,7 @@
 //! opinions — every branch it takes comes from the config it was handed.
 
 use crate::Outcome;
-use crate::config::{Pipeline, Policy, StepKind, TaskType};
+use crate::config::{Pipeline, Policy, StepKind};
 use crate::db::task::Task;
 
 /// What to do with a task, given where it has got to.
@@ -18,8 +18,8 @@ pub enum Plan {
         step: String,
         round: i64,
     },
-    /// Every pipeline of the type is done.
-    Finish,
+    /// The task's plan is spent: it comes to rest until something applies more.
+    Rest,
     /// Nothing can proceed. Parking is inert: the task sits there until
     /// `shep retry`.
     Park { reason: String },
@@ -42,9 +42,9 @@ pub fn start(policy: &Policy, task: &Task) -> Plan {
             policy.path.display()
         ));
     };
-    match planner.task_type.pipelines.first() {
+    match planner.plan.first() {
         Some(first) => planner.enter(first),
-        None => Plan::park(format!("type {:?} has no pipelines", task.kind)),
+        None => Plan::Rest,
     }
 }
 
@@ -67,7 +67,7 @@ pub fn after_pass(policy: &Policy, task: &Task) -> Plan {
             "pipeline {pipeline:?} is not in config any more, so this task is stranded"
         ));
     };
-    let Some(index) = current.steps.iter().position(|s| s == step) else {
+    let Some(index) = current.steps.iter().position(|s| s.name() == step) else {
         // The repair step is a step of this pipeline without being in its
         // sequence, so passing it means the round it was reached in can now be
         // tried properly: back to the top, with the round the rejection set.
@@ -82,7 +82,7 @@ pub fn after_pass(policy: &Policy, task: &Task) -> Plan {
     };
 
     match current.steps.get(index + 1) {
-        Some(next) => planner.step_plan(pipeline, next),
+        Some(next) => planner.step_plan(pipeline, next.name()),
         // The pipeline is out of steps, so it passed.
         None => planner.leave(pipeline),
     }
@@ -127,17 +127,20 @@ pub fn after_fail(policy: &Policy, task: &Task) -> Plan {
 /// Everything the decision needs, so the recursion stays readable.
 struct Planner<'a> {
     policy: &'a Policy,
-    task_type: &'a TaskType,
+    /// The task's plan: the top-level pipelines it runs, in order. Read from the
+    /// row, not the type — so a pipeline applied by hand has somewhere to return
+    /// to, and a plan outlives edits to the type that seeded it.
+    plan: &'a [String],
     /// Where the task is now, which is what says whether a round carries over.
     current_pipeline: Option<&'a str>,
     current_round: i64,
 }
 
 impl<'a> Planner<'a> {
-    fn new(policy: &'a Policy, task: &'a Task) -> Option<Planner<'a>> {
+    fn new(_policy: &'a Policy, task: &'a Task) -> Option<Planner<'a>> {
         Some(Planner {
-            policy,
-            task_type: policy.config.types.get(&task.kind)?,
+            policy: _policy,
+            plan: &task.plan,
             current_pipeline: task.pipeline.as_deref(),
             current_round: task.round,
         })
@@ -150,7 +153,7 @@ impl<'a> Planner<'a> {
             return Plan::park(format!("no pipeline {pipeline:?} in config"));
         };
         match entered.steps.first() {
-            Some(first) => self.step_plan(pipeline, first),
+            Some(first) => self.step_plan(pipeline, first.name()),
             None => Plan::park(format!("pipeline {pipeline:?} has no steps")),
         }
     }
@@ -189,7 +192,7 @@ impl<'a> Planner<'a> {
             return Plan::park(format!("pipeline {pipeline:?} is not in config any more"));
         };
         match current.steps.first() {
-            Some(first) => self.step_at(pipeline, first, self.current_round),
+            Some(first) => self.step_at(pipeline, first.name(), self.current_round),
             None => Plan::park(format!("pipeline {pipeline:?} has no steps")),
         }
     }
@@ -221,7 +224,7 @@ impl<'a> Planner<'a> {
     /// but validation forbids nesting inside a looping pipeline, so the parent has
     /// no on_fail either, and parking is the honest answer there too.
     fn rejected(&self, pipeline: &str, why: &str) -> Plan {
-        if self.task_type.pipelines.iter().any(|p| p == pipeline) {
+        if self.plan.iter().any(|p| p == pipeline) {
             return Plan::park(format!("{why}, so {pipeline:?} rejected this task"));
         }
         match self.parent_of(pipeline) {
@@ -234,27 +237,28 @@ impl<'a> Planner<'a> {
 
     /// A pipeline finished with `pass`; continue after it.
     fn leave(&self, finished: &str) -> Plan {
-        if let Some(index) = self.task_type.pipelines.iter().position(|p| p == finished) {
-            return match self.task_type.pipelines.get(index + 1) {
+        if let Some(index) = self.plan.iter().position(|p| p == finished) {
+            return match self.plan.get(index + 1) {
                 Some(next) => self.enter(next),
-                None => Plan::Finish,
+                // The plan is spent: the task comes to rest.
+                None => Plan::Rest,
             };
         }
 
-        // Not a pipeline of the type, so it was nested: continue in its parent,
-        // after the step that named it. Nesting is capped at 2, so there is at
-        // most one level to climb.
+        // Not a top-level pipeline of the plan, so it was nested: continue in its
+        // parent, after the step that named it. Nesting is capped at 2, so there
+        // is at most one level to climb.
         let Some(parent) = self.parent_of(finished) else {
             return Plan::park(format!(
-                "pipeline {finished:?} is not part of this type and nothing composes it"
+                "pipeline {finished:?} is not part of this plan and nothing composes it"
             ));
         };
         let Ok(outer) = self.policy.pipeline(&parent) else {
             return Plan::park(format!("pipeline {parent:?} is not in config any more"));
         };
-        match outer.steps.iter().position(|s| s == finished) {
+        match outer.steps.iter().position(|s| s.name() == finished) {
             Some(index) => match outer.steps.get(index + 1) {
-                Some(next) => self.step_plan(&parent, next),
+                Some(next) => self.step_plan(&parent, next.name()),
                 None => self.leave(&parent),
             },
             None => Plan::park(format!(
@@ -266,15 +270,14 @@ impl<'a> Planner<'a> {
     /// Which pipeline of this type composes `nested` as a step. Names are unique
     /// within a type (validated), so there is at most one answer.
     fn parent_of(&self, nested: &str) -> Option<String> {
-        self.task_type
-            .pipelines
+        self.plan
             .iter()
             .find(|outer| {
                 self.policy
                     .config
                     .pipeline
                     .get(outer.as_str())
-                    .is_some_and(|p| p.steps.iter().any(|s| s == nested))
+                    .is_some_and(|p| p.steps.iter().any(|s| s.name() == nested))
             })
             .cloned()
     }

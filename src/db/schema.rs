@@ -91,7 +91,30 @@ CREATE TABLE pane_agent (
 ) STRICT;
 "#;
 
-const MIGRATIONS: &[&str] = &[M001_INITIAL, M002_PANE_AGENT];
+/// Migration 3 — a task's plan: the ordered top-level pipelines it runs.
+///
+/// "What's next" moves out of the type's config and onto the row, so a pipeline
+/// applied by hand (`shep run`) has somewhere to return to, and a task that runs
+/// out of plan comes to rest rather than being stranded.
+const M003_TASK_PLAN: &str = r#"
+ALTER TABLE task ADD COLUMN plan TEXT NOT NULL DEFAULT '[]';
+"#;
+
+/// Migration 4 — the deadline an awaiting step must resolve by.
+///
+/// A deferred step with a `timeout` records when it must be resolved by; the
+/// supervisor fires its `on_timeout` verdict once that passes. NULL means the
+/// step waits without a deadline.
+const M004_AWAIT_DEADLINE: &str = r#"
+ALTER TABLE task ADD COLUMN await_deadline INTEGER;
+"#;
+
+const MIGRATIONS: &[&str] = &[
+    M001_INITIAL,
+    M002_PANE_AGENT,
+    M003_TASK_PLAN,
+    M004_AWAIT_DEADLINE,
+];
 
 /// The schema version this build writes.
 pub fn latest_version() -> i64 {

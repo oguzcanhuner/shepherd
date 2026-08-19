@@ -5,7 +5,6 @@
 //! itself, so a submitter can never pin a verdict to code it did not judge.
 
 use super::flow::finish_step;
-use super::policy::awaits_human;
 use super::step::{StepAt, StepReport};
 use super::transition::Outcome as TransitionOutcome;
 use crate::Outcome;
@@ -86,28 +85,27 @@ pub fn submit_check(conn: &mut Connection, task_id: &str, sub: &Submission) -> R
     Ok(written)
 }
 
-/// `shep approve` / `shep reject` — the only things that resolve a handoff.
-///
-/// The verdict is written as a check first, because a person approving a change is
-/// a verdict about a commit like any other — and it is what `integrate`
-/// will insist on. Then the step is finished with it, which is the same path a
-/// script's verdict takes.
-pub fn settle_by_human(
+/// `shep signal <task> --name <sig>` — resolve a step that is awaiting a named
+/// signal, built-in or declared. The verdict rides on the signal (an external
+/// system is the authority on its own result), recorded as a check for
+/// provenance, then the step is finished with it — the same path a human verdict
+/// takes.
+pub fn settle_by_signal(
     conn: &mut Connection,
     policy: &Policy,
     task_id: &str,
+    signal: &str,
     conclusion: Conclusion,
     author: &str,
     note: Option<String>,
 ) -> Result<(Check, TransitionOutcome)> {
     let task = task::require(conn, task_id)?;
-    // One answer for every way a task can fail to be yours: nowhere yet, somewhere
-    // else, or at a step whose pipeline never asks anyone.
-    let at = StepAt::of(&task)
-        .filter(|at| task.status == Status::Running && awaits_human(policy, &at.pipeline));
+    let at = StepAt::of(&task).filter(|at| {
+        task.status == Status::Running && policy.step_await(&at.pipeline, &at.step) == Some(signal)
+    });
     let Some(at) = at else {
         return Err(Error::other(format!(
-            "task {task_id} is not waiting for you: it is {} at {}",
+            "task {task_id} is not awaiting signal {signal:?}: it is {} at {}",
             task.status,
             StepAt::of(&task)
                 .map(|at| at.to_string())
@@ -133,12 +131,10 @@ pub fn settle_by_human(
     let report = StepReport::verdict(
         outcome,
         match &note {
-            Some(note) => format!("{author} said {}: {note}", conclusion.as_str()),
-            None => format!("{author} said {}", conclusion.as_str()),
+            Some(note) => format!("signal {signal} said {}: {note}", conclusion.as_str()),
+            None => format!("signal {signal} said {}", conclusion.as_str()),
         },
     );
-    // `finish_step`'s guard re-checks the position inside its own transaction,
-    // so a task that moved between the check and here bails rather than settles.
     let moved = finish_step(conn, policy, task_id, &at, &report)?;
     Ok((check, moved))
 }

@@ -1,20 +1,10 @@
 //! Reading a task's policy. Await values are config's business, but the engine
 //! needs to name them.
 
-use crate::config::{Await, Policy};
+use crate::config::Policy;
 use crate::db::task::Task;
 use crate::{Error, Result};
 use std::path::Path;
-
-/// Does this pipeline wait on a person?
-pub fn awaits_human(policy: &Policy, pipeline: &str) -> bool {
-    policy
-        .config
-        .pipeline
-        .get(pipeline)
-        .and_then(|p| p.await_on)
-        == Some(Await::Human)
-}
 
 /// The policy governing a task, loaded from the repo it belongs to.
 ///

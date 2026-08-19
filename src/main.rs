@@ -124,25 +124,21 @@ enum Command {
         id: String,
     },
 
-    /// Approve a task that is waiting for you, and let it carry on.
-    Approve {
+    /// Resolve a step that is awaiting a named signal (CI, a webhook, a script).
+    Signal {
+        /// The signal name the step awaits, e.g. a declared `[signal.ci]`.
+        #[arg(long, value_name = "NAME")]
+        name: String,
+        #[arg(long, conflicts_with = "fail")]
+        pass: bool,
+        #[arg(long)]
+        fail: bool,
         #[arg(long, value_name = "TASK")]
         task: Option<String>,
-        /// Who is approving. Defaults to $USER.
+        /// Who/what is signalling. Defaults to the signal name.
         #[arg(long, value_name = "NAME")]
         author: Option<String>,
         /// Why, for the record. Also read from stdin when piped.
-        #[arg(long, value_name = "TEXT")]
-        note: Option<String>,
-    },
-
-    /// Reject a task that is waiting for you, and send it wherever its pipeline
-    /// sends a rejection.
-    Reject {
-        #[arg(long, value_name = "TASK")]
-        task: Option<String>,
-        #[arg(long, value_name = "NAME")]
-        author: Option<String>,
         #[arg(long, value_name = "TEXT")]
         note: Option<String>,
     },
@@ -295,20 +291,14 @@ fn main() -> Result<()> {
                     } => cmd::check::submit(&db, pass, fail, author, task),
                 },
                 Command::Read { id } => cmd::check::read(&db, &id),
-                Command::Approve { task, author, note } => cmd::settle::run(
-                    &db,
-                    shepherd::db::check::Conclusion::Pass,
+                Command::Signal {
+                    name,
+                    pass,
+                    fail,
                     task,
                     author,
                     note,
-                ),
-                Command::Reject { task, author, note } => cmd::settle::run(
-                    &db,
-                    shepherd::db::check::Conclusion::Fail,
-                    task,
-                    author,
-                    note,
-                ),
+                } => cmd::signal::run(&db, &name, pass, fail, task, author, note),
                 Command::Run { pipeline, task } => cmd::settle::run_pipeline(&db, &pipeline, task),
                 Command::Retry { task } => cmd::retry::run(&db, &task),
                 Command::Cancel { task, reason } => cmd::cancel::run(&db, &task, reason),

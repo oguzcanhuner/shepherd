@@ -36,6 +36,11 @@ impl Store {
 
     /// A task governed by a repo that exists, for anything that will actually run.
     pub fn task_in(&self, repo: &str, kind: &str, brief: &str) -> Task {
+        // The type seeds the plan, exactly as `shep create` does.
+        let plan = shepherd::config::Policy::load(std::path::Path::new(repo))
+            .ok()
+            .and_then(|p| p.config.types.get(kind).map(|t| t.pipelines.clone()))
+            .unwrap_or_default();
         let mut conn = self.conn();
         shepherd::engine::create_task(
             &mut conn,
@@ -43,6 +48,7 @@ impl Store {
                 brief: brief.to_string(),
                 kind: kind.to_string(),
                 repo: repo.to_string(),
+                plan,
             },
         )
         .expect("create task")
@@ -199,23 +205,14 @@ printf '{{"outcome":"started","pane":"%s"}}\n' "$pane""#
     repo.write(
         r#"
 [pipeline.implement]
-steps = ["launch"]
-await = "agent_stopped"
+steps = [{ run = "launch", await = "agent_stopped" }]
 
 [pipeline.after]
 steps = ["verify"]
 
-[pipeline.handoff]
-steps = ["launch"]
-await = "human"
-
 [type.watched]
 description = "An agent in a pane, then a synchronous step of its own."
 pipelines = ["implement", "after"]
-
-[type.handed]
-description = "Waits for a person, and for nothing else."
-pipelines = ["handoff"]
 "#,
     );
     repo

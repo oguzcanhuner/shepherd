@@ -27,6 +27,8 @@ pub fn create_task(conn: &mut Connection, new: task::NewTask) -> Result<Task> {
         round: 0,
         status: Status::Queued,
         human_owned: false,
+        plan: new.plan,
+        await_deadline: None,
         repo: new.repo,
         worktree: None,
         branch: None,
@@ -94,21 +96,18 @@ pub fn run_pipeline(
     task_id: &str,
     pipeline: &str,
 ) -> Result<TransitionOutcome> {
-    let task = task::require(conn, task_id)?;
-    let kind = policy.task_type(&task.kind)?;
-    if !kind.pipelines.iter().any(|p| p == pipeline) {
-        return Err(Error::other(format!(
-            "type {:?} has no pipeline {pipeline:?} — it runs {}",
-            task.kind,
-            kind.pipelines.join(" → ")
-        )));
-    }
+    let _ = task::require(conn, task_id)?;
+    // Any defined pipeline can be applied by hand — it need not be in the type
+    // that seeded the task, because "what's next" now lives on the row, not in
+    // the type. The applied pipeline becomes the task's plan; when it finishes,
+    // the task comes to rest.
     let first = policy
         .pipeline(pipeline)?
         .steps
         .first()
         .ok_or_else(|| Error::other(format!("pipeline {pipeline:?} has no steps")))?
-        .clone();
+        .name()
+        .to_string();
 
     transition(conn, task_id, |task| {
         if task.status.is_terminal() {
@@ -117,12 +116,21 @@ pub fn run_pipeline(
                 task.status
             )));
         }
+        // Move the position to this pipeline. If it is already in the plan (a
+        // re-run), leave the plan be so the task continues its sequence
+        // afterwards; if it is new (applied to a resting task, or one the type
+        // never listed), append it so it has somewhere to return to — then rest.
+        let mut plan = task.plan.clone();
+        if !plan.iter().any(|p| p == pipeline) {
+            plan.push(pipeline.to_string());
+        }
         Ok(Decision::apply(
             TaskPatch::new()
                 .status(Status::Queued)
                 .pipeline(Some(pipeline))
                 .step(Some(first.clone()))
                 .round(0)
+                .plan(plan)
                 // Asking for a pipeline by hand is handing the task back.
                 .human_owned(false),
         )

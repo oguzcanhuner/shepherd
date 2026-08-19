@@ -191,6 +191,9 @@ pub fn tick(conn: &mut Connection, db_path: &Path, inflight: &mut Inflight) -> R
     // step resolved now leaves its task queued, and the same tick starts it.
     let drained = engine::drain(conn, engine::resolve::BATCH)?;
 
+    // A deferred step whose deadline passed resolves now too, the same way.
+    engine::fire_timeouts(conn)?;
+
     let queued = task::list_by_status(conn, task::Status::Queued)?;
     let mut started = 0;
     for candidate in &queued {
@@ -250,8 +253,8 @@ fn start_one(
             inflight.threads.insert(task_id.to_string(), handle);
             Ok(true)
         }
-        Started::Finished => {
-            tracing::info!(task = %task_id, "task finished");
+        Started::Rested => {
+            tracing::info!(task = %task_id, "task resting: plan spent");
             Ok(false)
         }
         Started::Parked { reason } => {

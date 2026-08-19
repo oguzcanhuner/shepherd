@@ -10,15 +10,20 @@ pub enum Status {
     Queued,
     Running,
     Parked,
+    /// The task's plan is empty: it has run everything asked of it and now waits,
+    /// idle, for a human or the orchestrator to apply another pipeline (with
+    /// `shep run`) — or to leave it be. Non-terminal: a rested task can move again.
+    Resting,
     Finished,
     Cancelled,
 }
 
 impl Status {
-    pub const ALL: [Status; 5] = [
+    pub const ALL: [Status; 6] = [
         Status::Queued,
         Status::Running,
         Status::Parked,
+        Status::Resting,
         Status::Finished,
         Status::Cancelled,
     ];
@@ -28,6 +33,7 @@ impl Status {
             Status::Queued => "queued",
             Status::Running => "running",
             Status::Parked => "parked",
+            Status::Resting => "resting",
             Status::Finished => "finished",
             Status::Cancelled => "cancelled",
         }
@@ -40,7 +46,8 @@ impl Status {
             .ok_or_else(|| Error::corrupt("task.status", format!("unknown status {s:?}")))
     }
 
-    /// A task in a terminal status will never move again on its own.
+    /// A task in a terminal status will never move again on its own. Resting is
+    /// *not* terminal: it is the idle state a task returns to between pipelines.
     pub fn is_terminal(self) -> bool {
         matches!(self, Status::Finished | Status::Cancelled)
     }
@@ -62,6 +69,14 @@ pub struct Task {
     pub round: i64,
     pub status: Status,
     pub human_owned: bool,
+    /// The top-level pipelines this task runs, in order — its remaining and
+    /// completed plan. Seeded from the type at creation and extended by
+    /// `shep run`. "What's next" is read from here, not from the type's config,
+    /// so a pipeline applied by hand has somewhere to return to.
+    pub plan: Vec<String>,
+    /// When the current awaiting step must be resolved by, if it has a timeout.
+    /// `None` means no deadline.
+    pub await_deadline: Option<i64>,
     pub repo: String,
     pub worktree: Option<String>,
     pub branch: Option<String>,
@@ -77,6 +92,8 @@ pub struct NewTask {
     pub brief: String,
     pub kind: String,
     pub repo: String,
+    /// The type's pipelines, which seed the task's plan.
+    pub plan: Vec<String>,
 }
 
 /// A set of fields to change. Applied to a row already re-read inside the
@@ -91,6 +108,8 @@ pub struct TaskPatch {
     pub step: Option<Option<String>>,
     pub round: Option<i64>,
     pub human_owned: Option<bool>,
+    pub plan: Option<Vec<String>>,
+    pub await_deadline: Option<Option<i64>>,
     pub worktree: Option<Option<String>>,
     pub branch: Option<Option<String>>,
     pub base: Option<Option<String>>,
@@ -131,6 +150,16 @@ impl TaskPatch {
         self
     }
 
+    pub fn plan(mut self, plan: Vec<String>) -> Self {
+        self.plan = Some(plan);
+        self
+    }
+
+    pub fn await_deadline(mut self, deadline: Option<i64>) -> Self {
+        self.await_deadline = Some(deadline);
+        self
+    }
+
     pub fn worktree(mut self, w: Option<impl Into<String>>) -> Self {
         self.worktree = Some(w.map(Into::into));
         self
@@ -164,6 +193,8 @@ impl TaskPatch {
         set!(step);
         set!(round);
         set!(human_owned);
+        set!(plan);
+        set!(await_deadline);
         set!(worktree);
         set!(branch);
         set!(base);
@@ -172,10 +203,12 @@ impl TaskPatch {
 }
 
 const COLUMNS: &str = "id, brief, type, pipeline, step, round, status, human_owned, \
-                       repo, worktree, branch, base, workspace_id, created, updated";
+                       plan, await_deadline, repo, worktree, branch, base, workspace_id, \
+                       created, updated";
 
 fn from_row(row: &Row<'_>) -> rusqlite::Result<Task> {
     let status: String = row.get("status")?;
+    let plan_json: String = row.get("plan")?;
     Ok(Task {
         id: row.get("id")?,
         brief: row.get("brief")?,
@@ -183,6 +216,14 @@ fn from_row(row: &Row<'_>) -> rusqlite::Result<Task> {
         pipeline: row.get("pipeline")?,
         step: row.get("step")?,
         round: row.get("round")?,
+        plan: serde_json::from_str(&plan_json).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(
+                0,
+                rusqlite::types::Type::Text,
+                Box::new(Error::corrupt("task.plan", e.to_string())),
+            )
+        })?,
+        await_deadline: row.get("await_deadline")?,
         // A bad status is corruption, not a query error; surface it as a value we
         // can report rather than mapping it into rusqlite's error space.
         status: Status::parse(&status).map_err(|e| {
@@ -264,8 +305,9 @@ pub fn next_id(conn: &Connection) -> Result<String> {
 pub fn insert(conn: &Connection, task: &Task) -> Result<()> {
     conn.execute(
         "INSERT INTO task (id, brief, type, pipeline, step, round, status, human_owned, \
-                           repo, worktree, branch, base, workspace_id, created, updated) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                           plan, await_deadline, repo, worktree, branch, base, workspace_id, \
+                           created, updated) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
         rusqlite::params![
             task.id,
             task.brief,
@@ -275,6 +317,8 @@ pub fn insert(conn: &Connection, task: &Task) -> Result<()> {
             task.round,
             task.status.as_str(),
             task.human_owned as i64,
+            serde_json::to_string(&task.plan).unwrap_or_else(|_| "[]".to_string()),
+            task.await_deadline,
             task.repo,
             task.worktree,
             task.branch,
@@ -291,8 +335,9 @@ pub fn insert(conn: &Connection, task: &Task) -> Result<()> {
 pub fn update(conn: &Connection, task: &Task) -> Result<()> {
     let changed = conn.execute(
         "UPDATE task SET brief = ?2, type = ?3, pipeline = ?4, step = ?5, round = ?6, \
-                         status = ?7, human_owned = ?8, repo = ?9, worktree = ?10, \
-                         branch = ?11, base = ?12, workspace_id = ?13, updated = ?14 \
+                         status = ?7, human_owned = ?8, plan = ?9, await_deadline = ?10, \
+                         repo = ?11, worktree = ?12, branch = ?13, base = ?14, \
+                         workspace_id = ?15, updated = ?16 \
          WHERE id = ?1",
         rusqlite::params![
             task.id,
@@ -303,6 +348,8 @@ pub fn update(conn: &Connection, task: &Task) -> Result<()> {
             task.round,
             task.status.as_str(),
             task.human_owned as i64,
+            serde_json::to_string(&task.plan).unwrap_or_else(|_| "[]".to_string()),
+            task.await_deadline,
             task.repo,
             task.worktree,
             task.branch,

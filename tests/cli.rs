@@ -141,19 +141,19 @@ fn a_parked_task_explains_itself_and_can_be_retried() {
     assert!(detail.contains("parked"), "got {detail}");
     assert!(detail.contains("outcome"), "got {detail}");
 
-    // Fix the cause, retry, and it finishes.
+    // Fix the cause, retry, and it runs to rest.
     repo.says(r#"{"outcome":"pass"}"#);
     assert!(ok(&db, &["retry", &task]).contains("queued again"));
-    wait_for_task(&db, &task, "finished");
+    wait_for_task(&db, &task, "resting");
 
     let trace = ok(&db, &["trace", &task]);
     assert!(trace.contains("task.resumed"), "got {trace}");
-    assert!(trace.contains("task.finished"), "got {trace}");
+    assert!(trace.contains("task.rested"), "got {trace}");
 
     signal(&child, libc::SIGTERM);
     child.wait().expect("wait");
 
-    // And a finished task is not retryable.
+    // And a rested task is not retryable.
     let run = shep(&db, &["retry", &task]);
     assert!(!run.status.success());
     assert!(
@@ -274,8 +274,7 @@ fn policy_repo() -> common::Repo {
     repo.write(
         r#"
 [pipeline.implement]
-steps = ["code"]
-await = "agent_stopped"
+steps = [{ run = "code", await = "agent_stopped" }]
 
 [pipeline.review]
 steps        = ["lint", "test", "agent_review"]
@@ -285,14 +284,13 @@ on_exhausted = "reject"
 
 [pipeline.handoff]
 steps = ["show_diff"]
-await = "human"
 
 [pipeline.integrate]
 steps = ["integrate"]
 
 [type.feature]
 description = "Normal change. Reviewed, then shown to you."
-pipelines   = ["implement", "review", "handoff", "integrate"]
+pipelines   = ["implement", "review", "handoff"]
 
 [type.hotfix]
 description = "Urgent production fix. No review, no handoff."
@@ -334,7 +332,7 @@ fn validate_reports_a_good_config_and_a_bad_one() {
     assert!(out.contains("is valid"), "got {out}");
     // It shows what each step resolved to, since the filename is the registration.
     assert!(out.contains("lint.sh"), "got {out}");
-    assert!(out.contains("await human"), "got {out}");
+    assert!(out.contains("await agent_stopped"), "got {out}");
     assert!(out.contains("on_fail → fix"), "got {out}");
 
     let json: serde_json::Value =

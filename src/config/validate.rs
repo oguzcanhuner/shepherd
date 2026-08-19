@@ -3,7 +3,7 @@
 //! Every rule reports rather than returns, so one pass tells you everything
 //! that is wrong with a config instead of the first thing.
 
-use super::{Await, Policy, StepKind};
+use super::{Policy, SIGNAL_AGENT_STOPPED, Step, StepKind};
 use crate::outcome::Outcome;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -52,9 +52,11 @@ pub fn validate(policy: &Policy) -> Vec<Problem> {
             problems.push(Problem::new(&at, "no steps, so this pipeline does nothing"));
         }
 
+        let step_names: Vec<String> = pipeline.steps.iter().map(|s| s.name().to_string()).collect();
+
         // `task.step` records a step by name, so a name appearing twice
         // in one pipeline leaves the engine unable to say where it is.
-        for duplicate in duplicates(&pipeline.steps) {
+        for duplicate in duplicates(&step_names) {
             problems.push(
                 Problem::new(&at, format!("step {duplicate:?} appears more than once"))
                     .hint("a task records its position by step name, so names must be unique here"),
@@ -62,8 +64,10 @@ pub fn validate(policy: &Policy) -> Vec<Problem> {
         }
 
         // Rule: every step resolves to an executable file, or to another pipeline.
-        for step in &pipeline.steps {
+        for entry in &pipeline.steps {
+            let step = entry.name();
             problems.extend(unresolved(policy, &at, step, "step"));
+            problems.extend(await_problems(policy, &at, entry));
 
             // A script wins over a same-named pipeline, so a step naming another
             // pipeline that a script also shadows would run something other than
@@ -143,43 +147,12 @@ pub fn validate(policy: &Policy) -> Vec<Problem> {
             );
         }
 
-        // `on_stop` is the meaning of an agent stopping without a check, so it
-        // means nothing unless an agent stopping is what resolves the pipeline.
-        if pipeline.on_stop.is_some() && pipeline.await_on != Some(Await::AgentStopped) {
-            problems.push(
-                Problem::new(
-                    &at,
-                    "on_stop is set but await is not \"agent_stopped\", so no stop ever resolves it",
-                )
-                .hint("set await = \"agent_stopped\", or drop on_stop"),
-            );
-        }
-        if pipeline.on_stop == Some(Outcome::Started) {
-            problems.push(
-                Problem::new(
-                    &at,
-                    "on_stop = \"started\" would leave the step waiting for the wait that just ended",
-                )
-                .hint("use pass, reject or error"),
-            );
-        }
-
-        // Rule: no await = "human" inside a loop, or the loop asks you N times.
-        if pipeline.loops() && pipeline.await_on == Some(Await::Human) {
-            problems.push(
-                Problem::new(
-                    &at,
-                    "await = \"human\" in a pipeline that loops would ask you again every round",
-                )
-                .hint("split the human step into a pipeline of its own"),
-            );
-        }
         if pipeline.loops() {
             // A task records one round, scoped to the innermost
             // pipeline. Descending into a nested pipeline from a looping one
             // would overwrite the round the loop is counting, so the two cannot
             // be combined.
-            for step in pipeline.steps.iter().chain(pipeline.on_fail.iter()) {
+            for step in pipeline.step_names() {
                 if let Some(inner) = policy.nested_pipeline(step) {
                     problems.push(
                         Problem::new(
@@ -194,23 +167,6 @@ pub fn validate(policy: &Policy) -> Vec<Problem> {
                 }
             }
 
-            // on_fail is one of this pipeline's steps too, so it is checked with them.
-            for step in pipeline.steps.iter().chain(pipeline.on_fail.iter()) {
-                if policy
-                    .nested_pipeline(step)
-                    .and_then(|inner| config.pipeline.get(inner))
-                    .is_some_and(|inner| inner.await_on == Some(Await::Human))
-                {
-                    problems.push(Problem::new(
-                        &at,
-                        format!(
-                            "this pipeline loops and step {step:?} awaits a human, \
-                             so it would ask you up to {} times",
-                            pipeline.max_rounds.unwrap_or(0)
-                        ),
-                    ));
-                }
-            }
         }
     }
 
@@ -279,7 +235,7 @@ fn composition_problems(policy: &Policy) -> Vec<Problem> {
 
     // Depth: a pipeline used as a step may contain only scripts.
     for (name, pipeline) in &config.pipeline {
-        for step in &pipeline.steps {
+        for step in pipeline.step_names() {
             let Some(inner) = policy
                 .nested_pipeline(step)
                 .and_then(|n| config.pipeline.get(n))
@@ -289,8 +245,8 @@ fn composition_problems(policy: &Policy) -> Vec<Problem> {
             let deeper: Vec<String> = inner
                 .steps
                 .iter()
-                .filter(|s| policy.nested_pipeline(s).is_some())
-                .cloned()
+                .filter(|s| policy.nested_pipeline(s.name()).is_some())
+                .map(|s| s.name().to_string())
                 .collect();
             if !deeper.is_empty() {
                 problems.push(
@@ -336,7 +292,7 @@ fn find_cycles(
         return;
     };
     path.push(at.to_string());
-    for step in &pipeline.steps {
+    for step in pipeline.step_names() {
         if let Some(inner) = policy.nested_pipeline(step) {
             let inner = inner.to_string();
             find_cycles(policy, &inner, path, found);
@@ -363,6 +319,93 @@ fn unresolved(policy: &Policy, at: &str, name: &str, role: &str) -> Vec<Problem>
     )
     .hint(format!("looked for {searched} — is it executable?"));
     vec![problem]
+}
+
+/// Everything wrong with one step's `await` / `on_missing`.
+fn await_problems(policy: &Policy, at: &str, step: &Step) -> Vec<Problem> {
+    let mut problems = Vec::new();
+    let name = step.name();
+
+    if let Some(signal) = step.await_on() {
+        // Rule: await must name a signal shepherd knows — a built-in or a
+        // declared `[signal.*]`. A typo here is a step that waits forever.
+        if !policy.signal_known(signal) {
+            problems.push(
+                Problem::new(
+                    at,
+                    format!("step {name:?} awaits unknown signal {signal:?}"),
+                )
+                .hint(format!(
+                    "known signals: {}. Declare a custom one with [signal.{signal}]",
+                    list(&policy.known_signals())
+                )),
+            );
+        }
+    }
+
+    // Rule: on_missing is the meaning of resolving without a check, so it needs
+    // something to resolve — i.e. an await.
+    if step.on_missing().is_some() && step.await_on().is_none() {
+        problems.push(
+            Problem::new(at, format!("step {name:?} sets on_missing but not await"))
+                .hint("on_missing is what a resolution with no check means; give the step an await"),
+        );
+    }
+    // on_missing is only consulted when a stop leaves no verdict, which is the
+    // agent_stopped case; a human or a custom signal supplies its own verdict.
+    if step.on_missing().is_some()
+        && step.await_on().is_some()
+        && step.await_on() != Some(SIGNAL_AGENT_STOPPED)
+    {
+        problems.push(
+            Problem::new(
+                at,
+                format!("step {name:?} sets on_missing but does not await \"agent_stopped\""),
+            )
+            .hint("on_missing only applies to an agent stopping without a check"),
+        );
+    }
+    if step.on_missing() == Some(Outcome::Started) {
+        problems.push(
+            Problem::new(
+                at,
+                format!("step {name:?} on_missing = \"started\" is not a settled outcome"),
+            )
+            .hint("use pass, reject or error"),
+        );
+    }
+
+    // timeout only means something for a step that waits, and must be readable.
+    if let Some(raw) = step.timeout() {
+        if step.await_on().is_none() {
+            problems.push(
+                Problem::new(at, format!("step {name:?} sets timeout but not await"))
+                    .hint("a timeout bounds a wait; give the step an await, or drop the timeout"),
+            );
+        }
+        if super::parse_duration(raw).is_none() {
+            problems.push(
+                Problem::new(at, format!("step {name:?} has an unreadable timeout {raw:?}"))
+                    .hint("use a number of seconds, or a unit: 90s, 30m, 2h, 1d"),
+            );
+        }
+    }
+    if step.on_timeout().is_some() && step.timeout().is_none() {
+        problems.push(
+            Problem::new(at, format!("step {name:?} sets on_timeout but not timeout"))
+                .hint("on_timeout is the verdict a timeout fires; give the step a timeout"),
+        );
+    }
+    if step.on_timeout() == Some(Outcome::Started) {
+        problems.push(
+            Problem::new(
+                at,
+                format!("step {name:?} on_timeout = \"started\" is not a settled outcome"),
+            )
+            .hint("use pass, reject or error"),
+        );
+    }
+    problems
 }
 
 fn duplicates(names: &[String]) -> Vec<String> {
@@ -410,7 +453,7 @@ pub fn resolved_steps(policy: &Policy, pipeline: &str) -> Vec<(String, Option<St
         .map(|p| {
             p.steps
                 .iter()
-                .map(|s| (s.clone(), policy.step_kind(s)))
+                .map(|s| (s.name().to_string(), policy.step_kind(s.name())))
                 .collect()
         })
         .unwrap_or_default()

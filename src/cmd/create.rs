@@ -23,7 +23,10 @@ pub fn run(
     // The type has to exist before the task does: an agent that guessed wrong
     // should be told the menu, not have a task queued that can never run.
     let policy = Policy::load(&repo)?;
-    policy.task_type(kind)?;
+    let task_type = policy.task_type(kind)?;
+    // The type seeds the task's plan; the engine reads what's next from the row,
+    // not from the type, after this point.
+    let plan = task_type.pipelines.clone();
 
     let mut conn = db::open(db_path)?;
     let task = engine::create_task(
@@ -32,6 +35,7 @@ pub fn run(
             brief,
             kind: kind.to_string(),
             repo: repo.to_string_lossy().into_owned(),
+            plan,
         },
     )?;
 

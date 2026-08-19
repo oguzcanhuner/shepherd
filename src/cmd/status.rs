@@ -74,10 +74,11 @@ pub fn run(db_path: &Path, json: bool) -> Result<()> {
     println!("paused      {}", if paused { "yes" } else { "no" });
     println!("supervisor  {}", describe(&health));
     println!(
-        "tasks       queued {}  running {}  parked {}  finished {}  cancelled {}",
+        "tasks       queued {}  running {}  parked {}  resting {}  finished {}  cancelled {}",
         count_of(task::Status::Queued),
         count_of(task::Status::Running),
         count_of(task::Status::Parked),
+        count_of(task::Status::Resting),
         count_of(task::Status::Finished),
         count_of(task::Status::Cancelled),
     );

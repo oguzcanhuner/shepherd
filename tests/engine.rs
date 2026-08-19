@@ -24,7 +24,7 @@ fn run_until_settled(store: &Store, task_id: &str) -> Task {
         if inflight.is_empty()
             && matches!(
                 task.status,
-                Status::Parked | Status::Finished | Status::Cancelled
+                Status::Parked | Status::Resting | Status::Cancelled
             )
         {
             return task;
@@ -53,7 +53,7 @@ fn a_passing_step_runs_the_pipeline_to_finished() {
     let task = store.task_in(&repo.root().to_string_lossy(), "simple", "one green step");
 
     let settled = run_until_settled(&store, &task.id);
-    assert_eq!(settled.status, Status::Finished, "got {settled:?}");
+    assert_eq!(settled.status, Status::Resting, "got {settled:?}");
     // A finished task is nowhere in particular any more.
     assert_eq!(settled.pipeline, None);
     assert_eq!(settled.step, None);
@@ -64,7 +64,7 @@ fn a_passing_step_runs_the_pipeline_to_finished() {
             "task.created",
             "task.step_started",
             "task.step_finished",
-            "task.finished",
+            "task.rested",
         ]
     );
 }
@@ -267,7 +267,7 @@ fn retry_runs_the_step_again() {
             .is_applied()
     );
 
-    assert_eq!(run_until_settled(&store, &task.id).status, Status::Finished);
+    assert_eq!(run_until_settled(&store, &task.id).status, Status::Resting);
     let kinds = kinds_of(&store, &task.id);
     assert_eq!(
         kinds.iter().filter(|k| *k == "task.step_finished").count(),
@@ -428,7 +428,7 @@ pipelines = ["check"]
     );
     let task = store.task_in(&repo.root().to_string_lossy(), "simple", "in order please");
 
-    assert_eq!(run_until_settled(&store, &task.id).status, Status::Finished);
+    assert_eq!(run_until_settled(&store, &task.id).status, Status::Resting);
     assert_eq!(repo.order(), vec!["one", "two", "three"]);
     assert_eq!(
         repo.positions(),
@@ -458,7 +458,7 @@ pipelines = ["first", "second"]
     );
     let task = store.task_in(&repo.root().to_string_lossy(), "simple", "both pipelines");
 
-    assert_eq!(run_until_settled(&store, &task.id).status, Status::Finished);
+    assert_eq!(run_until_settled(&store, &task.id).status, Status::Resting);
     assert_eq!(repo.order(), vec!["one", "two", "three"]);
     assert_eq!(
         repo.positions(),
@@ -488,7 +488,7 @@ pipelines = ["outer"]
     );
     let task = store.task_in(&repo.root().to_string_lossy(), "simple", "nest me");
 
-    assert_eq!(run_until_settled(&store, &task.id).status, Status::Finished);
+    assert_eq!(run_until_settled(&store, &task.id).status, Status::Resting);
     assert_eq!(repo.order(), vec!["one", "two", "three", "wrap_up"]);
     // Round is scoped to the innermost pipeline, and the nested steps say so.
     assert_eq!(

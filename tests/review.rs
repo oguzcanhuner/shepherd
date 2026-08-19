@@ -87,7 +87,7 @@ fn run(store: &Store, repo: &Repo, brief: &str) -> Task {
             let mut conn = store.conn();
             supervisor::tick(&mut conn, store.path(), &mut inflight).expect("tick");
             let task = task::require(&conn, &created.id).expect("task");
-            if inflight.is_empty() && matches!(task.status, Status::Parked | Status::Finished) {
+            if inflight.is_empty() && matches!(task.status, Status::Parked | Status::Resting) {
                 return task;
             }
         }
@@ -127,7 +127,7 @@ fn a_rejection_goes_to_the_repair_step_and_round_again() {
 
     let task = run(&store, &repo, "bad on the first pass");
 
-    assert_eq!(task.status, Status::Finished);
+    assert_eq!(task.status, Status::Resting);
     assert_eq!(
         repo.positions(),
         vec![
@@ -217,7 +217,7 @@ on_exhausted = "pass"
 
     assert_eq!(
         task.status,
-        Status::Finished,
+        Status::Resting,
         "on_exhausted is the pipeline's own outcome, so it can be a pass"
     );
     assert_eq!(
@@ -377,8 +377,7 @@ printf '{{"outcome":"started","pane":"wZ:p1"}}\n'"#
     repo.write(
         r#"
 [pipeline.implement]
-steps        = ["launch"]
-await        = "agent_stopped"
+steps        = [{ run = "launch", await = "agent_stopped" }]
 on_fail      = "redo"
 max_rounds   = 2
 on_exhausted = "reject"

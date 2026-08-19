@@ -215,6 +215,7 @@ fn concurrent_task_creation_gives_every_task_its_own_id() {
                         brief: format!("task {i}"),
                         kind: "feature".into(),
                         repo: "/tmp/repo".into(),
+                        plan: vec![],
                     },
                 )
                 .expect("create")

@@ -7,7 +7,10 @@
 mod model;
 mod validate;
 
-pub use model::{Await, Config, Pipeline, StepKind, TaskType};
+pub use model::{
+    BUILTIN_SIGNALS, Config, Pipeline, SIGNAL_AGENT_STOPPED, Signal, Step, StepDef, StepKind,
+    TaskType, parse_duration,
+};
 pub use validate::{Problem, report, resolved_steps, validate};
 
 use crate::{Error, Result};
@@ -122,6 +125,41 @@ impl Policy {
             .pipeline
             .get(name)
             .ok_or_else(|| Error::other(format!("unknown pipeline {name:?}")))
+    }
+
+    /// The signal a step defers on, if it is a deferred step.
+    pub fn step_await(&self, pipeline: &str, step: &str) -> Option<&str> {
+        self.config.pipeline.get(pipeline)?.step(step)?.await_on()
+    }
+
+    /// A step's `on_missing` fallback.
+    pub fn step_on_missing(&self, pipeline: &str, step: &str) -> Option<crate::Outcome> {
+        self.config.pipeline.get(pipeline)?.step(step)?.on_missing()
+    }
+
+    /// A step's timeout in seconds, if it declares a parseable one.
+    pub fn step_timeout_secs(&self, pipeline: &str, step: &str) -> Option<i64> {
+        self.config.pipeline.get(pipeline)?.step(step)?.timeout_secs()
+    }
+
+    /// A step's `on_timeout` verdict.
+    pub fn step_on_timeout(&self, pipeline: &str, step: &str) -> Option<crate::Outcome> {
+        self.config.pipeline.get(pipeline)?.step(step)?.on_timeout()
+    }
+
+    /// Is this signal name one shepherd knows — a built-in or a declared one?
+    pub fn signal_known(&self, name: &str) -> bool {
+        crate::config::BUILTIN_SIGNALS.contains(&name) || self.config.signal.contains_key(name)
+    }
+
+    /// Every signal name that a step may `await`, built-ins first.
+    pub fn known_signals(&self) -> Vec<String> {
+        let mut names: Vec<String> = crate::config::BUILTIN_SIGNALS
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        names.extend(self.config.signal.keys().cloned());
+        names
     }
 
     /// What a step name means: a script, or another pipeline. A name that is

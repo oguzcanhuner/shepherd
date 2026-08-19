@@ -20,7 +20,7 @@
 use super::{StepAt, StepReport, finish_step, policy_for};
 use crate::Outcome;
 use crate::Result;
-use crate::config::Await;
+use crate::config::SIGNAL_AGENT_STOPPED;
 use crate::db::check::Conclusion;
 use crate::db::raw_event::RawEvent;
 use crate::db::task::Status;
@@ -248,23 +248,13 @@ pub fn resolve_awaiting(conn: &mut Connection, task_id: &str, cause: &str) -> Re
             return Ok(false);
         }
     };
-    let awaits = policy
-        .config
-        .pipeline
-        .get(&at.pipeline)
-        .and_then(|p| p.await_on);
-    match awaits {
-        Some(Await::AgentStopped) => {}
-        // Nothing resolves a handoff but `shep approve` / `shep reject`. Status
-        // events for its pane are kept in `raw_event` and advance nothing
-        // — the whole point is that you can talk to the agent
-        // without the state machine moving under you.
-        Some(Await::Human) => return Ok(false),
-        None => return Ok(false),
-    }
-    if task.human_owned {
-        tracing::debug!(task = %task_id, "muted: {cause}");
-        return Ok(false);
+    // Only a step awaiting `agent_stopped` is resolved by a Herdr agent-stop
+    // event. A step awaiting a custom signal is resolved by its own emitter
+    // (`shep signal`) — its pane's status events are kept in `raw_event` and
+    // advance nothing.
+    match policy.step_await(&at.pipeline, &at.step) {
+        Some(SIGNAL_AGENT_STOPPED) => {}
+        Some(_) | None => return Ok(false),
     }
 
     // The verdict is a `check_run` row, not anything the agent told us directly.
@@ -288,15 +278,10 @@ pub fn resolve_awaiting(conn: &mut Connection, task_id: &str, cause: &str) -> Re
                 short_sha(&c.sha)
             ),
         ),
-        None => match policy
-            .config
-            .pipeline
-            .get(&at.pipeline)
-            .and_then(|p| p.on_stop)
-        {
+        None => match policy.step_on_missing(&at.pipeline, &at.step) {
             Some(outcome) => StepReport::verdict(
                 outcome,
-                format!("{cause}, leaving no check — the pipeline's on_stop says {outcome}"),
+                format!("{cause}, leaving no check — the step's on_missing says {outcome}"),
             ),
             None => StepReport::verdict(
                 Outcome::Error,
@@ -316,6 +301,52 @@ pub fn resolve_awaiting(conn: &mut Connection, task_id: &str, cause: &str) -> Re
         return Ok(false);
     }
     Ok(true)
+}
+
+/// Fire the `on_timeout` verdict for any awaiting step whose deadline has passed.
+///
+/// Event-driven resolution (Herdr edges, signals) can wait forever if the
+/// emitter never comes; this is the backstop. Run each tick, it is a cheap scan
+/// of running tasks — only those with a deadline in the past do anything.
+pub fn fire_timeouts(conn: &mut Connection) -> Result<usize> {
+    let now = crate::db::now();
+    let mut fired = 0;
+    for task in task::list_by_status(conn, Status::Running)? {
+        let Some(deadline) = task.await_deadline else {
+            continue;
+        };
+        if deadline > now {
+            continue;
+        }
+        let Some(at) = StepAt::of(&task) else {
+            continue;
+        };
+        let policy = match policy_for(&task) {
+            Ok(policy) => policy,
+            Err(e) => {
+                tracing::warn!(task = %task.id, "cannot fire timeout for {at}: {e}");
+                continue;
+            }
+        };
+        let outcome = policy
+            .step_on_timeout(&at.pipeline, &at.step)
+            .unwrap_or(Outcome::Error);
+        let report = StepReport::verdict(
+            outcome,
+            format!("{at} timed out — its on_timeout says {outcome}"),
+        );
+        tracing::info!(
+            task = %task.id, step = %at.step,
+            outcome = outcome.as_str(), "deferred step timed out"
+        );
+        match finish_step(conn, &policy, &task.id, &at, &report)? {
+            super::TransitionOutcome::Applied(_) => fired += 1,
+            super::TransitionOutcome::Bailed(reason) => {
+                tracing::debug!(task = %task.id, "timeout discarded: {reason}")
+            }
+        }
+    }
+    Ok(fired)
 }
 
 fn short_sha(sha: &str) -> &str {

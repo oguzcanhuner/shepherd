@@ -4,13 +4,12 @@
 mod common;
 
 use common::{Repo, make_executable};
-use shepherd::config::{Await, Policy, StepKind};
+use shepherd::config::{Policy, StepKind};
 
 /// The example config from docs/configuration.md, which must parse and validate as written.
 const EXAMPLE_CONFIG: &str = r#"
 [pipeline.implement]
-steps = ["code"]
-await = "agent_stopped"
+steps = [{ run = "code", await = "agent_stopped" }]
 
 [pipeline.review]
 steps        = ["lint", "test", "agent_review"]
@@ -20,7 +19,6 @@ on_exhausted = "reject"
 
 [pipeline.handoff]
 steps = ["show_diff"]
-await = "human"
 
 [pipeline.integrate]
 steps = ["integrate"]
@@ -59,20 +57,17 @@ fn the_config_from_the_plan_is_valid() {
 
     assert_eq!(policy.config.pipeline.len(), 4);
     assert_eq!(
-        policy.config.pipeline["implement"].await_on,
-        Some(Await::AgentStopped)
+        policy.step_await("implement", "code"),
+        Some("agent_stopped")
     );
-    assert_eq!(
-        policy.config.pipeline["handoff"].await_on,
-        Some(Await::Human)
-    );
+    assert_eq!(policy.step_await("handoff", "show_diff"), None);
     assert_eq!(policy.config.pipeline["review"].max_rounds, Some(3));
     assert_eq!(
         policy.config.pipeline["review"].on_exhausted,
         Some(shepherd::Outcome::Reject)
     );
     // Absent await means synchronous.
-    assert_eq!(policy.config.pipeline["integrate"].await_on, None);
+    assert_eq!(policy.step_await("integrate", "integrate"), None);
 
     let feature = policy.task_type("feature").expect("type feature");
     assert_eq!(feature.pipelines.len(), 4);
@@ -309,41 +304,55 @@ pipelines = ["review"]
 }
 
 #[test]
-fn rule_await_must_be_one_of_two_words() {
+fn rule_await_must_name_a_known_signal() {
     let repo = Repo::new();
     repo.script("lint");
     let problems = repo.problems(
         r#"
 [pipeline.review]
-steps = ["lint"]
-await = "agent_finished"
+steps = [{ run = "lint", await = "agent_finished" }]
 
 [type.feature]
 description = "x"
 pipelines = ["review"]
 "#,
     );
-    // A wrong value is a parse error, and the message names the alternatives.
+    // An unknown signal names the alternatives, and says how to add a custom one.
+    assert!(problems.contains("unknown signal"), "got {problems}");
     assert!(problems.contains("agent_stopped"), "got {problems}");
-    assert!(problems.contains("human"), "got {problems}");
 
-    // And both legal values are accepted.
-    for value in ["agent_stopped", "human"] {
-        let repo = Repo::new();
-        repo.script("lint");
-        repo.load(&format!(
-            r#"
+    // The built-in signal is accepted.
+    let repo = Repo::new();
+    repo.script("lint");
+    repo.load(
+        r#"
 [pipeline.review]
-steps = ["lint"]
-await = "{value}"
+steps = [{ run = "lint", await = "agent_stopped" }]
 
 [type.feature]
 description = "x"
 pipelines = ["review"]
-"#
-        ))
-        .unwrap_or_else(|e| panic!("await = {value:?} must be legal: {e}"));
-    }
+"#,
+    )
+    .expect("agent_stopped must be legal");
+
+    // A declared custom signal is accepted too.
+    let repo = Repo::new();
+    repo.script("lint");
+    repo.load(
+        r#"
+[signal.ci]
+description = "GitHub Actions result"
+
+[pipeline.review]
+steps = [{ run = "lint", await = "ci" }]
+
+[type.feature]
+description = "x"
+pipelines = ["review"]
+"#,
+    )
+    .expect("a declared signal must be awaitable");
 }
 
 #[test]
@@ -405,51 +414,6 @@ pipelines = ["outer"]
     );
     assert!(
         problems.contains("nesting is capped at 2"),
-        "got {problems}"
-    );
-}
-
-#[test]
-fn rule_a_human_await_may_not_sit_inside_a_loop() {
-    let repo = Repo::new();
-    repo.script("lint").script("fix").script("show_diff");
-
-    // Nested: a looping pipeline containing a pipeline that asks you.
-    let problems = repo.problems(
-        r#"
-[pipeline.handoff]
-steps = ["show_diff"]
-await = "human"
-
-[pipeline.review]
-steps = ["lint", "fix", "handoff"]
-on_fail = "fix"
-max_rounds = 3
-
-[type.feature]
-description = "x"
-pipelines = ["review"]
-"#,
-    );
-    assert!(problems.contains("awaits a human"), "got {problems}");
-    assert!(problems.contains("up to 3 times"), "got {problems}");
-
-    // And the same defect in one pipeline: it loops and it awaits a human.
-    let problems = repo.problems(
-        r#"
-[pipeline.review]
-steps = ["lint", "fix"]
-on_fail = "fix"
-max_rounds = 2
-await = "human"
-
-[type.feature]
-description = "x"
-pipelines = ["review"]
-"#,
-    );
-    assert!(
-        problems.contains("ask you again every round"),
         "got {problems}"
     );
 }

@@ -8,7 +8,7 @@ use super::plan::{self, Plan};
 use super::step::{StepAt, StepReport, StepSpec};
 use super::transition::{Decision, Outcome as TransitionOutcome, transition};
 use crate::Outcome;
-use crate::config::{Await, Policy};
+use crate::config::Policy;
 use crate::db::event::{NewEvent, names};
 use crate::db::task::{Status, TaskPatch};
 use crate::db::{self};
@@ -21,8 +21,8 @@ use std::path::Path;
 pub enum Started {
     /// A step is now in flight; run this and report back with [`finish_step`].
     Running(Box<StepSpec>),
-    /// The type's pipelines are all done.
-    Finished,
+    /// The plan is spent; the task is resting until something applies more.
+    Rested,
     /// The task is parked and will not move until `shep retry`.
     Parked { reason: String },
     /// The row moved before the lock was taken; someone else got there first.
@@ -87,7 +87,7 @@ pub fn begin_step(
             )?;
             Ok(Started::Running(Box::new(spec)))
         }
-        Plan::Finish => Ok(Started::Finished),
+        Plan::Rest => Ok(Started::Rested),
         Plan::Park { reason } => Ok(Started::Parked { reason }),
     }
 }
@@ -135,35 +135,32 @@ pub fn finish_step(
             // pipeline's `on_fail`, bounded by its `max_rounds`.
             Outcome::Reject => advance_to(&plan::after_fail(policy, task)),
 
-            // A promise, not an answer. What resolves it is the pipeline's await.
+            // A promise, not an answer. What resolves it is the step's await.
             Outcome::Started => {
-                let awaits = policy
-                    .config
-                    .pipeline
-                    .get(&at.pipeline)
-                    .and_then(|p| p.await_on);
+                let awaits = policy.step_await(&at.pipeline, &at.step);
                 match awaits {
-                    // `human_owned` is the muting: status events for its pane are
-                    // still written to `raw_event`, but advance nothing, so you can
-                    // talk to the agent without the state machine moving under you.
                     Some(await_on) => {
-                        Decision::apply(TaskPatch::new().human_owned(await_on == Await::Human))
-                            .with_event(
+                        // A timeout, if the step declares one, becomes a deadline
+                        // on the row for the supervisor to fire against.
+                        let deadline = policy
+                            .step_timeout_secs(&at.pipeline, &at.step)
+                            .map(|secs| db::now() + secs);
+                        Decision::apply(TaskPatch::new().await_deadline(deadline)).with_event(
                                 NewEvent::for_task(names::TASK_STEP_AWAITING, task_id).payload(
                                     serde_json::json!({
                                         "pipeline": at.pipeline,
                                         "step": at.step,
                                         "round": at.round,
-                                        "await": await_on.as_str(),
+                                        "await": await_on,
                                         "pane": report.pane,
                                     }),
                                 ),
                             )
                     }
                     None => park(format!(
-                        "step {} returned \"started\", but pipeline {} has no await, so nothing \
+                        "step {} returned \"started\", but it has no await, so nothing \
                          would ever resolve it",
-                        at.step, at.pipeline
+                        at.step
                     )),
                 }
             }
@@ -173,7 +170,9 @@ pub fn finish_step(
         // is the machine's again the moment it is not waiting for you.
         let decision = match report.outcome {
             Outcome::Started => decision,
-            _ => decision.map_patch(|patch| patch.human_owned(false)),
+            // Any answer clears the muting and the await deadline: the step is no
+            // longer waiting, so a timeout for it must not fire afterwards.
+            _ => decision.map_patch(|patch| patch.human_owned(false).await_deadline(None)),
         };
 
         // The step_finished event comes first: it is the record of what happened,
@@ -201,8 +200,8 @@ fn advance_to(plan: &Plan) -> Decision {
                 .step(Some(step.clone()))
                 .round(*round),
         ),
-        // These end the task, so they are the same either way.
-        Plan::Finish | Plan::Park { .. } => start_or_settle(plan),
+        // These end the current run, so they are the same either way.
+        Plan::Rest | Plan::Park { .. } => start_or_settle(plan),
     }
 }
 
@@ -227,13 +226,17 @@ fn start_or_settle(plan: &Plan) -> Decision {
                 "round": round,
             })),
         ),
-        Plan::Finish => Decision::apply(
+        // Resting keeps the plan on the row (so `shep get` shows what ran) but
+        // clears the position: nothing is in flight, and the supervisor leaves a
+        // resting task alone until something applies more with `shep run`.
+        Plan::Rest => Decision::apply(
             TaskPatch::new()
-                .status(Status::Finished)
+                .status(Status::Resting)
                 .step(None::<String>)
-                .pipeline(None::<String>),
+                .pipeline(None::<String>)
+                .human_owned(false),
         )
-        .with_event(NewEvent::new(names::TASK_FINISHED)),
+        .with_event(NewEvent::new(names::TASK_RESTED)),
         Plan::Park { reason } => park(reason.clone()),
     }
 }

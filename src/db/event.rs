@@ -25,6 +25,8 @@ pub mod names {
     pub const TASK_RESUMED: &str = "task.resumed";
     pub const TASK_CANCELLED: &str = "task.cancelled";
     pub const TASK_FINISHED: &str = "task.finished";
+    /// The task's plan is spent; it is idle until something applies more.
+    pub const TASK_RESTED: &str = "task.rested";
     pub const SUPERVISOR_STARTED: &str = "supervisor.started";
     pub const SUPERVISOR_STOPPED: &str = "supervisor.stopped";
 }

@@ -57,12 +57,7 @@ fn is_deferred(conn: &Connection, task: &Task) -> Result<bool> {
         return Ok(false);
     };
     match policy_for(task) {
-        Ok(policy) => Ok(policy
-            .config
-            .pipeline
-            .get(&at.pipeline)
-            .and_then(|p| p.await_on)
-            .is_some()),
+        Ok(policy) => Ok(policy.step_await(&at.pipeline, &at.step).is_some()),
         Err(e) => {
             tracing::warn!(task = %task.id, "cannot tell what {at} is waiting for: {e}");
             Ok(pane::for_task(conn, &task.id)?.is_some())

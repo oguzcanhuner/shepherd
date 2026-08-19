@@ -15,6 +15,10 @@ use crate::{Error, Result};
 use rusqlite::Connection;
 
 /// What the caller decided to do about the row it was just shown.
+// The Apply variant carries a whole patch; Bail is just a string. The value is
+// short-lived (built and consumed inside one transaction), so boxing to even the
+// variants out would cost more than it saves.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum Decision {
     /// Change these fields and record these events.

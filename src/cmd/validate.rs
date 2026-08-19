@@ -36,9 +36,6 @@ pub fn run(repo: &Path, json: bool) -> Result<()> {
     println!("{} is valid", policy.path.display());
     for (name, pipeline) in &policy.config.pipeline {
         let mut notes = Vec::new();
-        if let Some(await_on) = pipeline.await_on {
-            notes.push(format!("await {}", await_on.as_str()));
-        }
         if let Some(on_fail) = &pipeline.on_fail {
             notes.push(format!(
                 "on_fail → {on_fail}, max {} round(s)",
@@ -57,13 +54,27 @@ pub fn run(repo: &Path, json: bool) -> Result<()> {
             }
         );
         for (step, kind) in resolved_steps(&policy, name) {
+            let awaits = policy
+                .step_await(name, &step)
+                .map(|s| format!("  ⟳ await {s}"))
+                .unwrap_or_default();
             match kind {
                 // The filename is the registration, so showing the file is
                 // showing the registration.
-                Some(StepKind::Script(path)) => println!("  {step:<14} {}", path.display()),
-                Some(StepKind::Pipeline(inner)) => println!("  {step:<14} pipeline {inner}"),
+                Some(StepKind::Script(path)) => {
+                    println!("  {step:<14} {}{awaits}", path.display())
+                }
+                Some(StepKind::Pipeline(inner)) => {
+                    println!("  {step:<14} pipeline {inner}{awaits}")
+                }
                 None => println!("  {step:<14} UNRESOLVED"),
             }
+        }
+    }
+    if !policy.config.signal.is_empty() {
+        println!("\nsignals");
+        for (sig, decl) in &policy.config.signal {
+            println!("  {sig:<14} {}", decl.description);
         }
     }
     for (name, t) in &policy.config.types {
