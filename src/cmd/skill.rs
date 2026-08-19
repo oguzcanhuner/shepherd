@@ -53,9 +53,10 @@ const SKILL: &str = r#"
 You are talking to a person who will sometimes ask for changes to their code.
 Shepherd turns such a request into a task and runs it through the pipelines
 configured for this repository — spawning coding agents, running lint, tests
-and review, and pausing for the person's approval where the configuration says
-to. Your job is at the edges: deciding when a request should become a task,
-creating it well, watching it, and settling it when it waits for a decision.
+and review — until the plan is spent and the task comes to rest for the person
+to look at. Your job is at the edges: deciding when a request should become a
+task, creating it well, watching it, and applying the next pipeline when the
+person decides where a resting task should go.
 
 Every `shep` command is a local command; there is nothing to connect to.
 
@@ -96,17 +97,23 @@ A task moves on its own. You do not need to poll on the person's behalf, but
 when they ask how something is going, `shep ps` is the answer, and
 `shep trace <task>` explains anything surprising.
 
-## When a task waits for a decision
+## When a task comes to rest
 
-Some pipelines pause and wait for a human. The task shows as waiting in
-`shep ps`, and typically a pane has opened showing the change. The decision
-belongs to the person, and only relay it:
+A task runs the pipelines its type seeded, then **rests**: it shows as
+`resting` in `shep ps`, sits at no step, and typically leaves a pane open with
+the change (and often a live agent) for the person to look at. Resting is the
+natural end of a run and the moment the person takes over.
 
-    shep approve --task <task> --note "why"
-    shep reject  --task <task> --note "why"
+Humans are not in the state machine — there is no approve or reject. When the
+person has looked and wants the work to go further, apply the next pipeline:
 
-The note goes on the record. On reject, the task goes wherever this
-repository's configuration sends rejections.
+    shep run <pipeline> --task <task>
+
+For example, once they are happy with a reviewed change, `shep run integrate`
+to land it, or `shep run ship` to push and wait on CI. You choose the pipeline
+from the ones this repository defines (`shep validate` lists them). If the
+person is unhappy, apply a revise pipeline the same way, or cancel the task —
+their call to make, yours to relay.
 
 ## When a task is parked
 
@@ -121,7 +128,8 @@ fix the cause first or tell the person.
 
 ## Other verbs
 
-    shep run <pipeline> --task <task>   # send a task through a pipeline by hand
+    shep signal <task> --name <sig> --pass|--fail   # resolve a step awaiting a
+                                                    # named signal (CI, a webhook)
     shep pause | shep resume            # stop and restart the supervisor's intake
     shep validate                       # check the repo's config and list problems
 
@@ -129,7 +137,8 @@ fix the cause first or tell the person.
 
 - Do not do the task's work yourself in parallel; the task has its own working
   copy and its own agent, and two writers will diverge.
-- Do not approve or reject on your own judgement; relay the person's decision.
+- Do not decide on the person's behalf which pipeline to apply to a resting
+  task; relay what they want.
 - Do not edit `.shep/config.toml` to change a workflow mid-task.
 "#;
 
@@ -148,35 +157,55 @@ every edit, run `shep validate` — it lists every problem at once, with hints.
 
 ## The model
 
-- A **type** is an ordered list of pipelines. It is what a task is created as,
-  and it cannot loop, so a task always terminates.
+- A **type** seeds a task's plan: an ordered list of pipelines to run. It
+  cannot loop, so a task always terminates. When the plan is spent the task
+  **rests** — non-terminal, idle, waiting for a person or the orchestrator to
+  apply another pipeline with `shep run`.
 - A **pipeline** is an ordered list of steps with its own retry rules. It
   reports one outcome, which is why a pipeline's name can appear as a step in
   another pipeline (nesting is capped at two levels).
-- A **step** names a script: step `lint` runs `.shep/scripts/lint.sh`.
+- A **step** names a script (`lint` runs `.shep/scripts/lint.sh`), and may say
+  how it defers — see `await` below. A person is never a step: humans interact
+  with a resting task, between pipelines, not inside one.
 
 ## Config schema
 
     [pipeline.<name>]
-    steps        = ["a", "b"]   # required; scripts or other pipelines, in order
+    steps        = [                        # required; in order
+      "lint",                               #   a bare name is a synchronous step
+      { run = "code", await = "agent_stopped", on_missing = "pass" },
+      { run = "deploy", await = "ci", timeout = "30m", on_timeout = "reject" },
+    ]
     on_fail      = "fix"        # optional: step in THIS pipeline run after a reject
     max_rounds   = 3            # required whenever on_fail is set
     on_exhausted = "reject"     # the pipeline's outcome when max_rounds is spent
-    await        = "human"      # optional: "human" or "agent_stopped"
-    on_stop      = "pass"       # optional, agent_stopped only: what a stop with
-                                # no check means (default: error)
+
+    [signal.<name>]             # a custom signal a step may await
+    description = "who emits it and what it means"
 
     [type.<name>]
     description = "Shown in `shep types`; write it for the person choosing."
-    pipelines   = ["implement", "review", "handoff", "integrate"]
+    pipelines   = ["implement", "review"]   # seeds the plan; ends → the task rests
 
-Unknown fields are errors, not warnings — a typo cannot pass silently.
+A step's table form carries how it completes:
+
+    await       = "agent_stopped"  # what resolves it after it reports `started`:
+                                   #   the built-in "agent_stopped", or a declared
+                                   #   [signal.*] resolved by `shep signal`
+    on_missing  = "pass"           # verdict if it resolves with no check (default:
+                                   #   error). "pass" is for work a later pipeline judges
+    timeout     = "30m"            # optional deadline: 90s, 30m, 2h, 1d
+    on_timeout  = "reject"         # verdict when the timeout fires (default: error)
+
+Unknown fields are errors, not warnings — a typo cannot pass silently, and
+`await` must name a known signal (`agent_stopped` or a declared `[signal.*]`).
 
 Retry semantics: when a step reports `reject`, the pipeline runs `on_fail`,
 then starts its steps again from the top, with the round counter one higher.
-`await` semantics: a step that reports `started` leaves the pipeline waiting —
-for `shep approve`/`shep reject` when `await = "human"`, or for the task's
-pane agent to stop when `await = "agent_stopped"`.
+Await semantics: a step that reports `started` leaves the task waiting until
+its `await` signal arrives — `agent_stopped` when the task's pane agent stops,
+or a custom signal fired by `shep signal <task> --name <sig> --pass|--fail`
+(from CI, a webhook, a script). A `timeout` bounds the wait.
 
 ## The script contract
 
@@ -211,22 +240,24 @@ starts an agent, and reports `started`:
     echo '{"outcome":"started","pane":"'"$pane"'"}'
 
 The prompt is what differentiates steps: an implement step says "implement",
-a review step says "review and record a verdict". When the pipeline resolves,
-its result comes from the latest check recorded for that step; when there is
-no check, from the pipeline's `on_stop`; and with neither, it is an error.
+a review step says "review and record a verdict". When the step resolves, its
+result comes from the latest check recorded for it; when there is no check,
+from the step's `on_missing`; and with neither, it is an error.
 
-Use `on_stop = "pass"` for producing pipelines (implement): the agent just
-works and stops, and the next pipeline judges the result. Leave it unset for
-judging pipelines (review): tell that agent to run `shep check submit --pass`
+Use `on_missing = "pass"` for producing steps (implement): the agent just
+works and stops, and a later pipeline judges the result. Leave it unset for
+judging steps (review): tell that agent to run `shep check submit --pass`
 or `--fail` (body on stdin) before it stops, because a reviewer stopping
-without a verdict is a failure. A recorded check always wins over `on_stop`.
+without a verdict is a failure. A recorded check always wins over `on_missing`.
 
 ## Design rules
 
 - Make each step do one thing, so `shep trace` reads as a story.
 - `on_fail` must name a step in the same pipeline; rounds are scoped there.
-- Put human gates (`await = "human"`) exactly where a person would want to
-  look, typically after review and before integration — not everywhere.
+- End a type's plan where the person should take over — after review, before
+  integration, say. The task rests there; the person (or you, relaying them)
+  applies the next pipeline with `shep run`. Do not try to model the human as
+  a step; resting is the handoff.
 - Verdicts about code belong in checks, not in notes: `shep check submit`
   pins them to the exact commit judged, which is what an integrate step
   should verify before merging.

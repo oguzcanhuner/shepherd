@@ -32,7 +32,7 @@ The final line of the script's output must be one JSON object:
 | --- | --- |
 | `pass` | The step succeeded. The task moves forward. |
 | `reject` | The step's verdict is negative. The pipeline runs its retry step. |
-| `started` | The script launched an agent that will finish later. The pipeline's `await` says how the result arrives. |
+| `started` | The script launched work that will finish later. The step's `await` says which signal resolves it. |
 | `error` | Something broke. The task goes on hold until `shep retry`. |
 
 Everything printed before the final line is kept as a log, so a script is free
@@ -42,7 +42,8 @@ final line that fails to parse, is treated as an error.
 ## Steps that launch an agent
 
 For work worth watching, a script opens a Herdr pane, links it to the task,
-starts a coding agent, and reports `started`:
+starts a coding agent, and reports `started`. Its step declares
+`await = "agent_stopped"`, so the task waits until the agent stops:
 
 ```sh
 pane=$(herdr pane split --json | jq -r .pane_id)
@@ -54,6 +55,31 @@ echo '{"outcome":"started","pane":"'"$pane"'"}'
 
 The script owns the prompt. The wording after "run `shep context`" is what makes
 one step an implementation and another a review.
+
+When the agent stops, the step's result comes from the latest check recorded for
+it; with no check, from the step's `on_missing` (`pass` for producing steps a
+later pipeline judges, `error` otherwise).
+
+## Steps that wait on something else
+
+A step can defer to any external system by declaring a custom signal and having
+that system fire it. The script kicks the work off and returns `started`:
+
+```sh
+git push
+# ...arrange for CI to report back, then:
+echo '{"outcome":"started"}'
+```
+
+Its step awaits the declared signal, and CI (a webhook, a watcher, a cron job)
+resolves it from anywhere:
+
+```sh
+shep signal "$SHEP_TASK_ID" --name ci --pass          # or --fail, note on stdin
+```
+
+A `timeout` on the step bounds the wait, firing `on_timeout` if the signal never
+comes. See [configuration](configuration.md) for the signal and timeout keys.
 
 An agent working in a pane uses three commands:
 

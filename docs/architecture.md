@@ -35,15 +35,19 @@ repository root) in a browser.
    Herdr runs `hooks/forward.sh`, which writes the notification into the
    database. The supervisor reads those records, works out what changed, and
    resolves any step that was waiting.
-5. **You decide.** A pipeline with `await = "human"` sits until `shep approve`
-   or `shep reject`, each of which is one database write the supervisor picks up
-   on its next check.
+5. **The plan is spent.** When a task runs out of pipelines it comes to rest —
+   a non-terminal, idle status the supervisor leaves alone. A person (or the
+   orchestrator) applies the next pipeline with `shep run`, one database write
+   the supervisor picks up on its next check.
+6. **A signal resolves a wait.** A deferred step waits for its `await` signal:
+   `agent_stopped` (which shepherd derives from Herdr's events) or a custom one
+   fired by `shep signal`. A step's `timeout` is the backstop if none comes.
 
 ## The database
 
 | Table | Holds |
 | --- | --- |
-| `task` | Each task's description, type, current position and status. |
+| `task` | Each task's description, type, plan (the pipelines it runs), current position, await deadline and status. |
 | `check_run` | Pass/fail verdicts, each tied to the exact commit it judged. |
 | `event` | A permanent log of everything that happened (shown by `shep trace`). |
 | `pane_task` | Which terminal pane belongs to which task. |

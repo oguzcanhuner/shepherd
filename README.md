@@ -5,8 +5,8 @@
 You describe the workflow — which steps run, in what order, what happens when
 one fails — in a small config file kept in your repository. Shepherd runs your
 tasks through it: spawning coding agents in terminal panes where the work is
-worth watching, running everything else as plain scripts, and pausing for your
-approval exactly where you said it should.
+worth watching, running everything else as plain scripts, and coming to rest
+for you exactly where you said it should.
 
 Shepherd is a [Herdr](https://herdr.dev) plugin built around one Rust program,
 `shep`.
@@ -35,8 +35,8 @@ max_rounds   = 3          # how many times that can happen
 on_exhausted = "reject"   # what the pipeline reports when the limit is hit
 
 [type.feature]
-description = "Normal change. Reviewed, then shown to you."
-pipelines   = ["implement", "review", "handoff", "integrate"]
+description = "Normal change. Reviewed, then it rests for you."
+pipelines   = ["implement", "review"]
 
 [type.hotfix]
 description = "Urgent fix. Straight to integration."
@@ -45,8 +45,8 @@ pipelines   = ["implement", "integrate"]
 
 ```sh
 shep create --type feature "add rate limiting to the api"
-shep ps                     # watch it move through your pipelines
-shep approve                # when it reaches your handoff step
+shep ps                     # watch it move through your pipelines, then rest
+shep run integrate          # when you're happy, carry it on
 ```
 
 Each task works in its own git worktree on its own branch, so several tasks can

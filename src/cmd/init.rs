@@ -14,24 +14,27 @@ use std::path::Path;
 
 const CONFIG: &str = r#"# Shepherd workflow for this repository.
 #
-# A type is an ordered list of pipelines; a pipeline is an ordered list of
-# steps. A step named `check` runs `.shep/scripts/check.sh`, which reports its
-# result as one JSON line: {"outcome": "pass" | "reject" | "started" | "error"}.
+# A type seeds a task's plan: an ordered list of pipelines. A pipeline is an
+# ordered list of steps. A step named `check` runs `.shep/scripts/check.sh`,
+# which reports its result as one JSON line:
+#   {"outcome": "pass" | "reject" | "started" | "error"}
+# When a type's plan is spent the task RESTS — idle and non-terminal — until you
+# apply another pipeline with `shep run`. That rest is where you take over.
 #
 # Reference: https://github.com/oguzcanhuner/shepherd/tree/main/docs
 
 [pipeline.check]
 steps = ["check"]
 
-[pipeline.handoff]
-steps = ["handoff"]
-await = "human"          # resolves when you run `shep approve` or `shep reject`
-
 [type.task]
-description = "Run the checks, then wait for approval."
-pipelines = ["check", "handoff"]
+description = "Run the checks, then rest for you to look."
+pipelines = ["check"]
 
-# A pipeline can retry itself, and a deferred pipeline can wait for an agent:
+# Apply a pipeline to a resting task by hand (or have your orchestrator do it):
+#
+#   shep run integrate --task <id>
+#
+# A pipeline can retry itself, and a step can defer until a signal resolves it:
 #
 # [pipeline.review]
 # steps        = ["lint", "test"]
@@ -40,10 +43,14 @@ pipelines = ["check", "handoff"]
 # on_exhausted = "reject"
 #
 # [pipeline.implement]
-# steps   = ["implement"]
-# await   = "agent_stopped"      # resolves when the agent in the task's pane stops
-# on_stop = "pass"               # stopping with no recorded check counts as a pass;
-#                                # leave unset where a missing verdict is a failure
+# steps = [{ run = "implement", await = "agent_stopped", on_missing = "pass" }]
+#                                # await: the built-in "agent_stopped", or a
+#                                #   [signal.*] you declare and fire with `shep signal`
+#                                # on_missing = "pass": a stop with no check counts as a
+#                                #   pass; leave unset where a missing verdict is a failure
+#
+# [signal.ci]
+# description = "CI result, fired by `shep signal <task> --name ci --pass|--fail`"
 "#;
 
 const CHECK: &str = r#"#!/usr/bin/env bash
@@ -59,25 +66,10 @@ echo "check.sh is a stub — edit .shep/scripts/check.sh to run real checks"
 echo '{"outcome":"pass","note":"stub check"}'
 "#;
 
-const HANDOFF: &str = r#"#!/usr/bin/env bash
-# The `handoff` step. Its pipeline has `await = "human"`, so reporting
-# "started" hands the task to you: it waits until `shep approve` or
-# `shep reject`. Print anything useful for that decision above the last line.
-set -euo pipefail
-
-echo "task ${SHEP_TASK_ID} is ready for review"
-if [ -n "${SHEP_BRANCH:-}" ] && [ -n "${SHEP_BASE:-}" ]; then
-  git diff --stat "${SHEP_BASE}...${SHEP_BRANCH}" || true
-fi
-
-echo '{"outcome":"started"}'
-"#;
-
 pub fn run(repo: &Path) -> Result<()> {
     let files = [
         (repo.join(".shep/config.toml"), CONFIG, false),
         (repo.join(".shep/scripts/check.sh"), CHECK, true),
-        (repo.join(".shep/scripts/handoff.sh"), HANDOFF, true),
     ];
 
     for (path, content, executable) in files {
@@ -110,6 +102,6 @@ pub fn run(repo: &Path) -> Result<()> {
     println!("Next:");
     println!("  edit .shep/scripts/check.sh        # make the check real");
     println!("  shep create --type task \"try it\"   # queue a first task");
-    println!("  shep ps                            # watch it run");
+    println!("  shep ps                            # watch it run, then rest");
     Ok(())
 }
