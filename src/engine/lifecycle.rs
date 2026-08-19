@@ -26,7 +26,6 @@ pub fn create_task(conn: &mut Connection, new: task::NewTask) -> Result<Task> {
         step: None,
         round: 0,
         status: Status::Queued,
-        human_owned: false,
         plan: new.plan,
         await_deadline: None,
         repo: new.repo,
@@ -130,9 +129,7 @@ pub fn run_pipeline(
                 .pipeline(Some(pipeline))
                 .step(Some(first.clone()))
                 .round(0)
-                .plan(plan)
-                // Asking for a pipeline by hand is handing the task back.
-                .human_owned(false),
+                .plan(plan),
         )
         .with_event(
             NewEvent::new(names::TASK_RESUMED).payload(serde_json::json!({

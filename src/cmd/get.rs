@@ -26,7 +26,6 @@ pub fn run(db_path: &Path, task_id: &str, json: bool) -> Result<()> {
                 "step": task.step,
                 "round": task.round,
                 "status": task.status.as_str(),
-                "human_owned": task.human_owned,
                 "repo": task.repo,
                 "worktree": task.worktree,
                 "branch": task.branch,
@@ -65,9 +64,6 @@ pub fn run(db_path: &Path, task_id: &str, json: bool) -> Result<()> {
         ("round", task.round.to_string()),
         ("repo", task.repo.clone()),
     ];
-    if task.human_owned {
-        rows.push(("owner", "you — status events for its pane are muted".into()));
-    }
     for (label, value) in [
         ("worktree", &task.worktree),
         ("branch", &task.branch),

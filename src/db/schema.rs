@@ -109,11 +109,19 @@ const M004_AWAIT_DEADLINE: &str = r#"
 ALTER TABLE task ADD COLUMN await_deadline INTEGER;
 "#;
 
+/// Migration 5 — drop `human_owned`. Humans left the state machine: a task
+/// rests between pipelines rather than being "owned" while it waits, so the
+/// muting flag has nothing left to mean.
+const M005_DROP_HUMAN_OWNED: &str = r#"
+ALTER TABLE task DROP COLUMN human_owned;
+"#;
+
 const MIGRATIONS: &[&str] = &[
     M001_INITIAL,
     M002_PANE_AGENT,
     M003_TASK_PLAN,
     M004_AWAIT_DEADLINE,
+    M005_DROP_HUMAN_OWNED,
 ];
 
 /// The schema version this build writes.

@@ -34,7 +34,6 @@ pub fn run(db_path: &Path, all: bool, json: bool) -> Result<()> {
                     "pipeline": t.pipeline,
                     "step": t.step,
                     "round": t.round,
-                    "human_owned": t.human_owned,
                     "repo": t.repo,
                     "brief": t.brief,
                     "created": t.created,
@@ -74,11 +73,7 @@ pub fn run(db_path: &Path, all: bool, json: bool) -> Result<()> {
         rows.push([
             t.id.clone(),
             t.kind.clone(),
-            if t.human_owned {
-                format!("{} (yours)", t.status)
-            } else {
-                t.status.to_string()
-            },
+            t.status.to_string(),
             position,
             super::ago(now - t.updated),
             super::truncate(&t.brief, 48),

@@ -68,7 +68,6 @@ pub struct Task {
     pub step: Option<String>,
     pub round: i64,
     pub status: Status,
-    pub human_owned: bool,
     /// The top-level pipelines this task runs, in order — its remaining and
     /// completed plan. Seeded from the type at creation and extended by
     /// `shep run`. "What's next" is read from here, not from the type's config,
@@ -107,7 +106,6 @@ pub struct TaskPatch {
     pub pipeline: Option<Option<String>>,
     pub step: Option<Option<String>>,
     pub round: Option<i64>,
-    pub human_owned: Option<bool>,
     pub plan: Option<Vec<String>>,
     pub await_deadline: Option<Option<i64>>,
     pub worktree: Option<Option<String>>,
@@ -142,11 +140,6 @@ impl TaskPatch {
 
     pub fn round(mut self, r: i64) -> Self {
         self.round = Some(r);
-        self
-    }
-
-    pub fn human_owned(mut self, owned: bool) -> Self {
-        self.human_owned = Some(owned);
         self
     }
 
@@ -192,7 +185,6 @@ impl TaskPatch {
         set!(pipeline);
         set!(step);
         set!(round);
-        set!(human_owned);
         set!(plan);
         set!(await_deadline);
         set!(worktree);
@@ -202,7 +194,7 @@ impl TaskPatch {
     }
 }
 
-const COLUMNS: &str = "id, brief, type, pipeline, step, round, status, human_owned, \
+const COLUMNS: &str = "id, brief, type, pipeline, step, round, status, \
                        plan, await_deadline, repo, worktree, branch, base, workspace_id, \
                        created, updated";
 
@@ -229,7 +221,6 @@ fn from_row(row: &Row<'_>) -> rusqlite::Result<Task> {
         status: Status::parse(&status).map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
         })?,
-        human_owned: row.get::<_, i64>("human_owned")? != 0,
         repo: row.get("repo")?,
         worktree: row.get("worktree")?,
         branch: row.get("branch")?,
@@ -304,10 +295,10 @@ pub fn next_id(conn: &Connection) -> Result<String> {
 
 pub fn insert(conn: &Connection, task: &Task) -> Result<()> {
     conn.execute(
-        "INSERT INTO task (id, brief, type, pipeline, step, round, status, human_owned, \
+        "INSERT INTO task (id, brief, type, pipeline, step, round, status, \
                            plan, await_deadline, repo, worktree, branch, base, workspace_id, \
                            created, updated) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         rusqlite::params![
             task.id,
             task.brief,
@@ -316,7 +307,6 @@ pub fn insert(conn: &Connection, task: &Task) -> Result<()> {
             task.step,
             task.round,
             task.status.as_str(),
-            task.human_owned as i64,
             serde_json::to_string(&task.plan).unwrap_or_else(|_| "[]".to_string()),
             task.await_deadline,
             task.repo,
@@ -335,9 +325,9 @@ pub fn insert(conn: &Connection, task: &Task) -> Result<()> {
 pub fn update(conn: &Connection, task: &Task) -> Result<()> {
     let changed = conn.execute(
         "UPDATE task SET brief = ?2, type = ?3, pipeline = ?4, step = ?5, round = ?6, \
-                         status = ?7, human_owned = ?8, plan = ?9, await_deadline = ?10, \
-                         repo = ?11, worktree = ?12, branch = ?13, base = ?14, \
-                         workspace_id = ?15, updated = ?16 \
+                         status = ?7, plan = ?8, await_deadline = ?9, \
+                         repo = ?10, worktree = ?11, branch = ?12, base = ?13, \
+                         workspace_id = ?14, updated = ?15 \
          WHERE id = ?1",
         rusqlite::params![
             task.id,
@@ -347,7 +337,6 @@ pub fn update(conn: &Connection, task: &Task) -> Result<()> {
             task.step,
             task.round,
             task.status.as_str(),
-            task.human_owned as i64,
             serde_json::to_string(&task.plan).unwrap_or_else(|_| "[]".to_string()),
             task.await_deadline,
             task.repo,

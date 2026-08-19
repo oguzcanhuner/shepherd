@@ -170,9 +170,9 @@ pub fn finish_step(
         // is the machine's again the moment it is not waiting for you.
         let decision = match report.outcome {
             Outcome::Started => decision,
-            // Any answer clears the muting and the await deadline: the step is no
-            // longer waiting, so a timeout for it must not fire afterwards.
-            _ => decision.map_patch(|patch| patch.human_owned(false).await_deadline(None)),
+            // Any answer clears the await deadline: the step is no longer
+            // waiting, so a timeout for it must not fire afterwards.
+            _ => decision.map_patch(|patch| patch.await_deadline(None)),
         };
 
         // The step_finished event comes first: it is the record of what happened,
@@ -233,8 +233,7 @@ fn start_or_settle(plan: &Plan) -> Decision {
             TaskPatch::new()
                 .status(Status::Resting)
                 .step(None::<String>)
-                .pipeline(None::<String>)
-                .human_owned(false),
+                .pipeline(None::<String>),
         )
         .with_event(NewEvent::new(names::TASK_RESTED)),
         Plan::Park { reason } => park(reason.clone()),

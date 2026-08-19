@@ -189,7 +189,6 @@ fn creating_a_task_records_it_as_queued_with_an_event() {
 
     assert_eq!(task.status, Status::Queued);
     assert_eq!(task.round, 0);
-    assert!(!task.human_owned);
     assert_eq!(task.pipeline, None);
 
     let events = event::for_task(&conn, &task.id).expect("events");
